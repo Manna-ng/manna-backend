@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/auth/requireAdmin";
-import { createVendorSettlementsForDeliveredOrder } from "@/lib/marketplace/vendorSettlement";
+import { generateVendorSettlementsForOrder } from "@/lib/marketplace/vendorSettlement";
 
 export async function POST(
   _req: NextRequest,
@@ -14,11 +14,9 @@ export async function POST(
     }
 
     const { id: orderId } = await ctx.params;
-    const result = await createVendorSettlementsForDeliveredOrder({
-      orderId,
-      actorUserId: admin.adminId,
-      source: "ADMIN_GENERATE_SETTLEMENTS",
-    });
+
+    // generateVendorSettlementsForOrder expects the orderId string
+    const result = await generateVendorSettlementsForOrder(orderId);
 
     return NextResponse.json({ ok: true, result }, { status: 200 });
   } catch (error: unknown) {

@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -6,24 +7,14 @@ function bad(msg: string, status = 400) {
   return Response.json({ ok: false, error: msg }, { status });
 }
 
-type Ctx =
-  | { params: { id: string } }
-  | { params: Promise<{ id: string }> }
-  | { params?: any };
+type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   try {
     const url = new URL(req.url);
+    const { id: paramId } = await ctx.params;
 
-    // ✅ Next.js may provide params as a Promise in some runtimes/dev setups
-    const params = ctx?.params ? await Promise.resolve(ctx.params) : null;
-
-    // Because your folder is [id], the param name is "id"
-    const paramId = params?.id;
-
-    // Optional fallback (helps testing)
     const queryId = url.searchParams.get("orderId") || url.searchParams.get("id");
-
     const orderId = String(paramId || queryId || "").trim();
 
     if (!orderId) {
@@ -44,10 +35,12 @@ export async function GET(req: Request, ctx: Ctx) {
 
     const delivery = order.delivery;
 
-    const orFilters = [
-      delivery?.kwikTaskId ? { jobId: delivery.kwikTaskId } : null,
-      delivery?.kwikUniqueOrderId ? { uniqueOrderId: delivery.kwikUniqueOrderId } : null,
-    ].filter(Boolean) as any[];
+    const orFilters: Prisma.DeliveryWebhookEventWhereInput[] = [
+      ...(delivery?.kwikTaskId ? [{ jobId: delivery.kwikTaskId }] : []),
+      ...(delivery?.kwikUniqueOrderId
+        ? [{ uniqueOrderId: delivery.kwikUniqueOrderId }]
+        : []),
+    ];
 
     const events = delivery
       ? await prisma.deliveryWebhookEvent.findMany({
@@ -85,21 +78,19 @@ export async function GET(req: Request, ctx: Ctx) {
             updatedAt: delivery.updatedAt,
           }
         : null,
-      timeline: events.map((e) => ({
-        id: e.id,
-        jobId: e.jobId,
-        uniqueOrderId: e.uniqueOrderId,
-        jobStatus: e.jobStatus,
-        receivedAt: e.receivedAt,
-        processedAt: e.processedAt,
-        status: e.status,
-        error: e.error,
+      timeline: events.map((event) => ({
+        id: event.id,
+        jobId: event.jobId,
+        uniqueOrderId: event.uniqueOrderId,
+        jobStatus: event.jobStatus,
+        receivedAt: event.receivedAt,
+        processedAt: event.processedAt,
+        status: event.status,
+        error: event.error,
       })),
     });
-  } catch (err: any) {
-    return Response.json(
-      { ok: false, error: err?.message ?? "tracking_error" },
-      { status: 500 }
-    );
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "tracking_error";
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }

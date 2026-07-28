@@ -58,7 +58,7 @@ export async function createDeliveryFromOrder(orderId: string) {
       status: "CREATED",
       kwikTaskId: String(kwik.taskId),
       kwikTrackingUrl: kwik.trackingUrl,
-      kwikRawResponse: kwik.raw,
+      kwikRawResponse: JSON.stringify(kwik.raw),
       kwikUniqueOrderId: kwik.uniqueOrderId,
       kwikJobStatus: 1,
       kwikStatusCheckUrl: kwik.statusCheckUrl,

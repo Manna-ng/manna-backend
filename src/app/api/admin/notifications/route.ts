@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function PATCH(_req: NextRequest) {
+export async function PATCH() {
   try {
     const admin = await requireAdminUser();
     const result = await markAllNotificationsRead({ userId: admin.id, role: "ADMIN" });

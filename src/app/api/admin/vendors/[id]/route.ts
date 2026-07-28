@@ -5,7 +5,6 @@ import { requireAdmin } from "@/lib/auth/requireAdmin";
 import { isVendorStatus } from "@/lib/marketplace/constants";
 import {
   isJsonObject,
-  optionalBoolean,
   optionalNumber,
   optionalString,
 } from "@/lib/marketplace/json";

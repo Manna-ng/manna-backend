@@ -15,7 +15,40 @@ let accessTokenExpiry = 0;
 let cookieHeader: string | null = null;
 let cookieExpiry = 0;
 
-type KwikApiResponse = Record<string, any>;
+type JsonRecord = Record<string, unknown>;
+type KwikApiResponse = JsonRecord;
+
+type NormalizedKwikStatus = {
+  job_status: number;
+  unique_order_id: string | null;
+  tracking_url: string | null;
+};
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return isRecord(value) ? value : {};
+}
+
+function asRecordArray(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function toStringOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return String(value);
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function lagosNowPlus(minutes: number) {
   const d = new Date(Date.now() + minutes * 60 * 1000);
@@ -49,14 +82,20 @@ function resetSession() {
   cookieExpiry = 0;
 }
 
-function looksLikeCannotMethodText(x: any) {
-  if (typeof x === "string") {
-    return x.startsWith("Cannot ") || x.includes("Cannot POST") || x.includes("Cannot GET");
+function looksLikeCannotMethodText(value: unknown) {
+  if (typeof value === "string") {
+    return (
+      value.startsWith("Cannot ") ||
+      value.includes("Cannot POST") ||
+      value.includes("Cannot GET")
+    );
   }
-  if (x && typeof x === "object") {
-    const s = JSON.stringify(x);
+
+  if (isRecord(value)) {
+    const s = JSON.stringify(value);
     return s.includes("Cannot POST") || s.includes("Cannot GET") || s.includes("Cannot ");
   }
+
   return false;
 }
 
@@ -86,12 +125,12 @@ async function loginWithEmailPassword(force = false) {
     }
   );
 
-  const body = res.data;
-
-  const ok = body?.status === 200 || body?.status === 201;
+  const body = asRecord(res.data);
+  const ok = body.status === 200 || body.status === 201;
   if (!ok) throw new Error(`KWIK vendor_login failed: ${JSON.stringify(body)}`);
 
-  const token = body?.data?.access_token ?? body?.access_token ?? null;
+  const bodyData = asRecord(body.data);
+  const token = toStringOrNull(bodyData.access_token ?? body.access_token);
   if (!token) {
     throw new Error(`KWIK vendor_login missing access_token: ${JSON.stringify(body)}`);
   }
@@ -105,11 +144,15 @@ async function loginWithEmailPassword(force = false) {
     cookieExpiry = now + 5 * 60 * 1000;
   }
 
-  accessToken = String(token);
+  accessToken = token;
   accessTokenExpiry = now + 25 * 60 * 1000;
 }
 
-async function kwikPost(path: string, body: any, retry = true): Promise<KwikApiResponse> {
+async function kwikPost(
+  path: string,
+  body: JsonRecord,
+  retry = true
+): Promise<KwikApiResponse> {
   const BASE = mustEnv("KWIK_BASE_URL", process.env.KWIK_BASE_URL);
   const DOMAIN_NAME = mustEnv("KWIK_DOMAIN_NAME", process.env.KWIK_DOMAIN_NAME);
 
@@ -129,9 +172,9 @@ async function kwikPost(path: string, body: any, retry = true): Promise<KwikApiR
     }
   );
 
-  const data = res.data;
+  const data = asRecord(res.data);
 
-  if (data?.status === 101 && retry) {
+  if (data.status === 101 && retry) {
     resetSession();
     await loginWithEmailPassword(true);
     return kwikPost(path, body, false);
@@ -140,7 +183,11 @@ async function kwikPost(path: string, body: any, retry = true): Promise<KwikApiR
   return data;
 }
 
-async function kwikGet(path: string, params: any, retry = true): Promise<KwikApiResponse> {
+async function kwikGet(
+  path: string,
+  params: JsonRecord,
+  retry = true
+): Promise<KwikApiResponse> {
   const BASE = mustEnv("KWIK_BASE_URL", process.env.KWIK_BASE_URL);
   const DOMAIN_NAME = mustEnv("KWIK_DOMAIN_NAME", process.env.KWIK_DOMAIN_NAME);
 
@@ -157,9 +204,9 @@ async function kwikGet(path: string, params: any, retry = true): Promise<KwikApi
     httpsAgent,
   });
 
-  const data = res.data;
+  const data = asRecord(res.data);
 
-  if (data?.status === 101 && retry) {
+  if (data.status === 101 && retry) {
     resetSession();
     await loginWithEmailPassword(true);
     return kwikGet(path, params, false);
@@ -178,9 +225,9 @@ async function kwikGetAbsoluteUrl(url: string, retry = true): Promise<KwikApiRes
     httpsAgent,
   });
 
-  const data = res.data;
+  const data = asRecord(res.data);
 
-  if (data?.status === 101 && retry) {
+  if (data.status === 101 && retry) {
     resetSession();
     await loginWithEmailPassword(true);
     return kwikGetAbsoluteUrl(url, false);
@@ -189,43 +236,47 @@ async function kwikGetAbsoluteUrl(url: string, retry = true): Promise<KwikApiRes
   return data;
 }
 
-function normalizeJobStatus(res: any) {
-  const payload = res?.data ?? res ?? {};
+function normalizeJobStatus(res: unknown): NormalizedKwikStatus | null {
+  const root = asRecord(res);
+  const payload = asRecord(root.data ?? root);
+  const job = asRecord(payload.job);
+  const nestedData = asRecord(payload.data);
+  const tracking = asRecord(payload.tracking);
 
   const jobStatusRaw =
     payload.job_status ??
     payload.jobStatus ??
     payload.status ??
-    payload.job?.job_status ??
-    payload.job?.status ??
-    payload.data?.job_status ??
+    job.job_status ??
+    job.status ??
+    nestedData.job_status ??
     null;
 
   const job_status = Number(jobStatusRaw);
   if (!Number.isFinite(job_status)) return null;
 
-  const unique_order_id =
+  const uniqueOrderId =
     payload.unique_order_id ??
     payload.uniqueOrderId ??
-    payload.job?.unique_order_id ??
-    payload.job?.uniqueOrderId ??
-    payload.data?.unique_order_id ??
+    job.unique_order_id ??
+    job.uniqueOrderId ??
+    nestedData.unique_order_id ??
     null;
 
-  const tracking_url =
+  const trackingUrl =
     payload.result_tracking_link ??
     payload.tracking_url ??
     payload.trackingUrl ??
-    payload.tracking?.url ??
-    payload.job?.result_tracking_link ??
-    payload.job?.tracking_url ??
-    payload.data?.result_tracking_link ??
+    tracking.url ??
+    job.result_tracking_link ??
+    job.tracking_url ??
+    nestedData.result_tracking_link ??
     null;
 
   return {
     job_status,
-    unique_order_id: unique_order_id != null ? String(unique_order_id) : null,
-    tracking_url: tracking_url != null ? String(tracking_url) : null,
+    unique_order_id: toStringOrNull(uniqueOrderId),
+    tracking_url: toStringOrNull(trackingUrl),
   };
 }
 
@@ -257,37 +308,37 @@ export async function getKwikJobStatus(args: { jobId: string; statusCheckUrl?: s
 
   const errors: string[] = [];
 
-  for (const c of candidates) {
+  for (const candidate of candidates) {
     const res =
-      c.method === "GET"
-        ? await kwikGet(c.path, { job_id: jobId }).catch((e) => {
-            errors.push(`${c.method} ${c.path} threw: ${e?.message ?? e}`);
+      candidate.method === "GET"
+        ? await kwikGet(candidate.path, { job_id: jobId }).catch((error: unknown) => {
+            errors.push(`${candidate.method} ${candidate.path} threw: ${getMessage(error)}`);
             return null;
           })
-        : await kwikPost(c.path, { job_id: jobId }).catch((e) => {
-            errors.push(`${c.method} ${c.path} threw: ${e?.message ?? e}`);
+        : await kwikPost(candidate.path, { job_id: jobId }).catch((error: unknown) => {
+            errors.push(`${candidate.method} ${candidate.path} threw: ${getMessage(error)}`);
             return null;
           });
 
     if (!res) continue;
 
     if (looksLikeCannotMethodText(res)) {
-      errors.push(`${c.method} ${c.path} not allowed: ${String(res).trim()}`);
+      errors.push(`${candidate.method} ${candidate.path} not allowed: ${JSON.stringify(res)}`);
       continue;
     }
 
-    if (res?.status !== 200) {
-      errors.push(`${c.method} ${c.path} failed: ${JSON.stringify(res)}`);
+    if (res.status !== 200) {
+      errors.push(`${candidate.method} ${candidate.path} failed: ${JSON.stringify(res)}`);
       continue;
     }
 
     const norm = normalizeJobStatus(res);
     if (!norm) {
-      errors.push(`${c.method} ${c.path} missing job_status`);
+      errors.push(`${candidate.method} ${candidate.path} missing job_status`);
       continue;
     }
 
-    return { ...norm, raw: res, usedEndpoint: `${c.method} ${c.path}` };
+    return { ...norm, raw: res, usedEndpoint: `${candidate.method} ${candidate.path}` };
   }
 
   throw new Error(`KWIK status check failed. Tried: ${errors.join(" | ")}`);
@@ -321,7 +372,10 @@ export async function createKwikDelivery(order: {
   const whLat = Number(process.env.WAREHOUSE_LAT);
   const whLng = Number(process.env.WAREHOUSE_LNG);
 
-  if (!Number.isFinite(whLat) || !Number.isFinite(whLng)) throw new Error("Invalid WAREHOUSE_LAT/LNG");
+  if (!Number.isFinite(whLat) || !Number.isFinite(whLng)) {
+    throw new Error("Invalid WAREHOUSE_LAT/LNG");
+  }
+
   if (!Number.isFinite(order.deliveryLat) || !Number.isFinite(order.deliveryLng)) {
     throw new Error("deliveryLat/deliveryLng are required");
   }
@@ -355,7 +409,7 @@ export async function createKwikDelivery(order: {
     },
   ];
 
-  const pay = await kwikPost(`/send_payment_for_task`, {
+  const pay = await kwikPost("/send_payment_for_task", {
     vendor_id: vendorId,
     user_id: userId,
     form_id: formId,
@@ -378,39 +432,41 @@ export async function createKwikDelivery(order: {
     parcel_amount: 0,
   });
 
-  if (pay?.status !== 200) {
+  if (pay.status !== 200) {
     throw new Error(`KWIK send_payment_for_task failed: ${JSON.stringify(pay)}`);
   }
 
-  const perTaskCostRaw = pay?.data?.per_task_cost ?? pay?.per_task_cost ?? null;
-  const perTaskCost = perTaskCostRaw != null ? String(perTaskCostRaw) : "";
+  const payData = asRecord(pay.data);
+  const perTaskCostRaw = payData.per_task_cost ?? pay.per_task_cost ?? null;
+  const perTaskCost = toStringOrNull(perTaskCostRaw) ?? "";
   if (!perTaskCost) throw new Error(`Missing per_task_cost: ${JSON.stringify(pay)}`);
 
-  const bill = await kwikPost(`/get_bill_breakdown`, {
+  const bill = await kwikPost("/get_bill_breakdown", {
     user_id: userId,
     form_id: formId,
     amount: perTaskCost,
-    insurance_amount: pay?.data?.insurance_amount ?? 0,
-    total_no_of_tasks: pay?.data?.total_no_of_tasks ?? 1,
-    total_service_charge: pay?.data?.total_service_charge ?? 0,
+    insurance_amount: payData.insurance_amount ?? 0,
+    total_no_of_tasks: payData.total_no_of_tasks ?? 1,
+    total_service_charge: payData.total_service_charge ?? 0,
     credits: 0,
     promo_value: null,
     benefit_type: null,
-    is_loader_required: pay?.data?.is_loader_required ?? 0,
-    loaders_amount: pay?.data?.loaders_amount ?? 0,
-    loaders_count: pay?.data?.loaders_count ?? 0,
-    delivery_instruction: pay?.data?.delivery_instruction ?? "",
+    is_loader_required: payData.is_loader_required ?? 0,
+    loaders_amount: payData.loaders_amount ?? 0,
+    loaders_count: payData.loaders_count ?? 0,
+    delivery_instruction: payData.delivery_instruction ?? "",
     vehicle_id: order.vehicleId,
-    delivery_images: pay?.data?.delivery_images ?? "",
+    delivery_images: payData.delivery_images ?? "",
     is_cod_job: 0,
     parcel_amount: 0,
     delivery_charge_by_buyer: 1,
   });
 
-  const surgeCost = bill?.data?.SURGE_PRICING ?? 0;
-  const surgeType = bill?.data?.SURGE_TYPE ?? 0;
+  const billData = asRecord(bill.data);
+  const surgeCost = toNumber(billData.SURGE_PRICING, 0);
+  const surgeType = toNumber(billData.SURGE_TYPE, 0);
 
-  const create = await kwikPost(`/create_task_via_vendor`, {
+  const create = await kwikPost("/create_task_via_vendor", {
     vendor_id: vendorId,
     is_multiple_tasks: 1,
     timezone,
@@ -421,45 +477,48 @@ export async function createKwikDelivery(order: {
     ...(teamIdRaw ? { team_id: Number(teamIdRaw) } : {}), // ✅ don't send "" (KWIK can reject)
     pickups,
     deliveries,
-    insurance_amount: pay?.data?.insurance_amount ?? 0,
-    total_no_of_tasks: pay?.data?.total_no_of_tasks ?? 1,
-    total_service_charge: pay?.data?.total_service_charge ?? 0,
+    insurance_amount: payData.insurance_amount ?? 0,
+    total_no_of_tasks: payData.total_no_of_tasks ?? 1,
+    total_service_charge: payData.total_service_charge ?? 0,
     payment_method: paymentMethod,
     amount: perTaskCost,
-    is_loader_required: pay?.data?.is_loader_required ?? 0,
-    loaders_amount: pay?.data?.loaders_amount ?? 0,
-    loaders_count: pay?.data?.loaders_count ?? 0,
-    delivery_instruction: pay?.data?.delivery_instruction ?? "",
+    is_loader_required: payData.is_loader_required ?? 0,
+    loaders_amount: payData.loaders_amount ?? 0,
+    loaders_count: payData.loaders_count ?? 0,
+    delivery_instruction: payData.delivery_instruction ?? "",
     vehicle_id: order.vehicleId,
-    delivery_images: pay?.data?.delivery_images ?? "",
+    delivery_images: payData.delivery_images ?? "",
     surge_cost: surgeCost,
     surge_type: surgeType,
     sareaId,
     unique_order_id: order.orderId,
   });
 
-  if (create?.status !== 200) {
+  if (create.status !== 200) {
     throw new Error(`KWIK create_task_via_vendor failed: ${JSON.stringify(create)}`);
   }
 
-  const pickupJobId = create?.data?.pickups?.[0]?.job_id ?? null;
-  const deliveryJobId = create?.data?.deliveries?.[0]?.job_id ?? null;
+  const createData = asRecord(create.data);
+  const pickupJobs = asRecordArray(createData.pickups);
+  const deliveryJobs = asRecordArray(createData.deliveries);
+  const taskOtps = asRecordArray(createData.task_otp);
+
+  const pickupJobId = pickupJobs[0]?.job_id ?? null;
+  const deliveryJobId = deliveryJobs[0]?.job_id ?? null;
   const taskId = deliveryJobId ?? pickupJobId;
 
   const trackingUrl =
-    create?.data?.deliveries?.[0]?.result_tracking_link ??
-    create?.data?.pickups?.[0]?.result_tracking_link ??
-    null;
+    deliveryJobs[0]?.result_tracking_link ?? pickupJobs[0]?.result_tracking_link ?? null;
 
   if (!taskId) throw new Error(`Missing job_id: ${JSON.stringify(create)}`);
 
   return {
     taskId: String(taskId),
-    trackingUrl,
+    trackingUrl: toStringOrNull(trackingUrl),
     raw: create,
     perTaskCost,
-    otp: create?.data?.task_otp?.[0]?.job_otp ?? null,
-    uniqueOrderId: create?.data?.unique_order_id ?? null,
-    statusCheckUrl: create?.data?.job_status_check_link ?? null,
+    otp: taskOtps[0]?.job_otp ?? null,
+    uniqueOrderId: toStringOrNull(createData.unique_order_id),
+    statusCheckUrl: toStringOrNull(createData.job_status_check_link),
   };
 }

@@ -39,7 +39,7 @@ export function isWithinDeliveryWindow(date = new Date()) {
 }
 
 export function getNextDeliveryWindowStart(date = new Date()) {
-  let lagosDate = getLagosDate(date);
+  const lagosDate = getLagosDate(date);
 
   while (true) {
     const day = lagosDate.getDay();

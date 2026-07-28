@@ -1,8 +1,8 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { requireCustomerUser } from "@/lib/notifications/auth";
 import { markAllNotificationsRead } from "@/lib/notifications/notificationService";
 
-export async function POST(_req: NextRequest) {
+export async function POST() {
   try {
     const user = await requireCustomerUser();
     const result = await markAllNotificationsRead({ userId: user.id, role: "CUSTOMER" });

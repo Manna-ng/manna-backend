@@ -187,7 +187,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     doc.end();
     const pdf = await done;
 
-    return new NextResponse(pdf, {
+    return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",

@@ -71,6 +71,11 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/admin/market-clusters/[id]/route.ts"
   },
   {
+    "method": "PATCH",
+    "path": "/api/admin/media/[mediaId]",
+    "sourceFile": "src/app/api/admin/media/[mediaId]/route.ts"
+  },
+  {
     "method": "GET",
     "path": "/api/admin/notifications",
     "sourceFile": "src/app/api/admin/notifications/route.ts"
@@ -154,6 +159,26 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "POST",
     "path": "/api/admin/test/delivery/from-order",
     "sourceFile": "src/app/api/admin/test/delivery/from-order/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/vendor-onboarding/applications",
+    "sourceFile": "src/app/api/admin/vendor-onboarding/applications/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/vendor-onboarding/applications/[id]",
+    "sourceFile": "src/app/api/admin/vendor-onboarding/applications/[id]/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/vendor-onboarding/applications/[id]/approve",
+    "sourceFile": "src/app/api/admin/vendor-onboarding/applications/[id]/approve/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/vendor-onboarding/applications/[id]/reject",
+    "sourceFile": "src/app/api/admin/vendor-onboarding/applications/[id]/reject/route.ts"
   },
   {
     "method": "GET",
@@ -402,6 +427,11 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
   },
   {
     "method": "GET",
+    "path": "/api/products/[slug]/media",
+    "sourceFile": "src/app/api/products/[slug]/media/route.ts"
+  },
+  {
+    "method": "GET",
     "path": "/api/vendors",
     "sourceFile": "src/app/api/vendors/route.ts"
   },
@@ -416,6 +446,41 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/vendors/notifications/route.ts"
   },
   {
+    "method": "POST",
+    "path": "/api/vendors/onboarding/agreements/accept",
+    "sourceFile": "src/app/api/vendors/onboarding/agreements/accept/route.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/vendors/onboarding/bank",
+    "sourceFile": "src/app/api/vendors/onboarding/bank/route.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/vendors/onboarding/business",
+    "sourceFile": "src/app/api/vendors/onboarding/business/route.ts"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/vendors/onboarding/pickup-location",
+    "sourceFile": "src/app/api/vendors/onboarding/pickup-location/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/onboarding/start",
+    "sourceFile": "src/app/api/vendors/onboarding/start/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/vendors/onboarding/status",
+    "sourceFile": "src/app/api/vendors/onboarding/status/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/onboarding/submit",
+    "sourceFile": "src/app/api/vendors/onboarding/submit/route.ts"
+  },
+  {
     "method": "GET",
     "path": "/api/vendors/orders",
     "sourceFile": "src/app/api/vendors/orders/route.ts"
@@ -424,6 +489,21 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "POST",
     "path": "/api/vendors/orders/[id]/ready",
     "sourceFile": "src/app/api/vendors/orders/[id]/ready/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/vendors/products/[id]/media",
+    "sourceFile": "src/app/api/vendors/products/[id]/media/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/products/[id]/media",
+    "sourceFile": "src/app/api/vendors/products/[id]/media/route.ts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/vendors/products/[id]/media/[mediaId]",
+    "sourceFile": "src/app/api/vendors/products/[id]/media/[mediaId]/route.ts"
   },
   {
     "method": "POST",

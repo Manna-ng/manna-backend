@@ -13,7 +13,8 @@ async function getUser(): Promise<AuthUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("manna_token")?.value;
   if (!token) return null;
-  return verifyAuthToken(token) as Promise<AuthUser | null>;
+  // verifyAuthToken may return a value or a promise; await handles both
+  return (await verifyAuthToken(token)) as AuthUser | null;
 }
 
 export async function DELETE(

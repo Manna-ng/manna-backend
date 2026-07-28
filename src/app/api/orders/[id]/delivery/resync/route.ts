@@ -1,6 +1,11 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getKwikJobStatus } from "@/services/kwikWebhook";
-import { mapKwikStatusToDeliveryStatus, canMoveForward } from "@/lib/kwik-status";
+import {
+  canMoveForward,
+  mapKwikStatusToDeliveryStatus,
+  type DeliveryStatus,
+} from "@/lib/kwik-status";
 
 export const runtime = "nodejs";
 
@@ -8,12 +13,11 @@ function bad(msg: string, status = 400) {
   return Response.json({ ok: false, error: msg }, { status });
 }
 
-type Ctx = { params: Promise<{ id: string }> } | { params: { id: string } };
+type Ctx = { params: Promise<{ id: string }> };
 
-export async function POST(req: Request, ctx: Ctx) {
+export async function POST(_req: Request, ctx: Ctx) {
   try {
-    const params = await Promise.resolve((ctx as any).params);
-    const orderId = params?.id;
+    const { id: orderId } = await ctx.params;
 
     if (!orderId) return bad("Missing order id");
 
@@ -25,50 +29,59 @@ export async function POST(req: Request, ctx: Ctx) {
     if (!order) return bad("Order not found", 404);
     if (!order.delivery) return bad("Order has no delivery", 400);
 
-    const d = order.delivery;
-    if (!d.kwikTaskId) return bad("Delivery missing kwikTaskId (job id)", 400);
+    const delivery = order.delivery;
+    if (!delivery.kwikTaskId) {
+      return bad("Delivery missing kwikTaskId (job id)", 400);
+    }
 
-    const kwik = await getKwikJobStatus(d.kwikTaskId);
+    const kwik = await getKwikJobStatus({
+      jobId: delivery.kwikTaskId,
+      statusCheckUrl: delivery.kwikStatusCheckUrl ?? null,
+    });
+
     const jobStatus = kwik.job_status;
+    const mappedStatus = mapKwikStatusToDeliveryStatus(jobStatus);
 
-    const mapped = mapKwikStatusToDeliveryStatus(jobStatus);
-
-    const deliveryData: any = {
+    const deliveryData: Prisma.DeliveryUpdateInput = {
       kwikJobStatus: jobStatus,
       lastStatusCheckAt: new Date(),
       lastStatusCheckError: null,
       statusCheckAttempts: 0,
       nextStatusCheckAt: null,
-      kwikRawResponse: kwik.raw,
+      kwikRawResponse: kwik.raw as Prisma.InputJsonValue,
     };
 
-    if (kwik.unique_order_id && !d.kwikUniqueOrderId) {
+    if (kwik.unique_order_id && !delivery.kwikUniqueOrderId) {
       deliveryData.kwikUniqueOrderId = kwik.unique_order_id;
     }
-    if (kwik.tracking_url && !d.kwikTrackingUrl) {
+
+    if (kwik.tracking_url && !delivery.kwikTrackingUrl) {
       deliveryData.kwikTrackingUrl = kwik.tracking_url;
     }
 
+    const currentStatus = delivery.status as DeliveryStatus;
     const shouldUpdate =
-      d.status !== mapped && canMoveForward(d.status as any, mapped as any);
+      currentStatus !== mappedStatus && canMoveForward(currentStatus, mappedStatus);
 
-    if (shouldUpdate) deliveryData.status = mapped;
+    if (shouldUpdate) {
+      deliveryData.status = mappedStatus;
+    }
 
-    if (mapped === "DELIVERED") {
-      deliveryData.deliveredAt = d.deliveredAt ?? new Date();
+    if (mappedStatus === "DELIVERED") {
+      deliveryData.deliveredAt = delivery.deliveredAt ?? new Date();
       deliveryData.kwikLastTerminalStatus = jobStatus;
     }
 
     await prisma.$transaction(async (tx) => {
-      await tx.delivery.update({ where: { id: d.id }, data: deliveryData });
+      await tx.delivery.update({ where: { id: delivery.id }, data: deliveryData });
 
-      if (mapped === "DELIVERED") {
+      if (mappedStatus === "DELIVERED") {
         await tx.order.update({ where: { id: orderId }, data: { status: "DELIVERED" } });
-      } else if (mapped === "FAILED" || mapped === "CANCELLED") {
+      } else if (mappedStatus === "FAILED" || mappedStatus === "CANCELLED") {
         if (order.status !== "DELIVERED") {
           await tx.order.update({ where: { id: orderId }, data: { status: "CANCELLED" } });
         }
-      } else if (mapped === "ASSIGNED" || mapped === "IN_TRANSIT") {
+      } else if (mappedStatus === "ASSIGNED" || mappedStatus === "IN_TRANSIT") {
         if (order.status !== "DELIVERED") {
           await tx.order.update({ where: { id: orderId }, data: { status: "OUT_FOR_DELIVERY" } });
         }
@@ -78,14 +91,15 @@ export async function POST(req: Request, ctx: Ctx) {
     return Response.json({
       ok: true,
       orderId,
-      deliveryId: d.id,
-      jobId: d.kwikTaskId,
+      deliveryId: delivery.id,
+      jobId: delivery.kwikTaskId,
       jobStatus,
-      mappedStatus: mapped,
+      mappedStatus,
       updated: shouldUpdate,
       usedEndpoint: kwik.usedEndpoint,
     });
-  } catch (err: any) {
-    return Response.json({ ok: false, error: err?.message ?? "resync_error" }, { status: 500 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "resync_error";
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }

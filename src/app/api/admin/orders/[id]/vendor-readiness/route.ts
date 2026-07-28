@@ -43,11 +43,6 @@ export async function GET(
           status: true,
           marketClusterId: true,
           deliveryQuoteId: true,
-          marketplaceFulfillmentStatus: true,
-          vendorOrderCount: true,
-          vendorReadyCount: true,
-          readyForKwikAt: true,
-          kwikTaskCreatedAt: true,
         },
       }),
       prisma.vendorOrder.findMany({
@@ -71,11 +66,16 @@ export async function GET(
     ]);
 
     if (!order) {
-      return NextResponse.json({ ok: false, message: "Order not found" }, { status: 404 });
+      return NextResponse.json(
+        { ok: false, message: "Order not found" },
+        { status: 404 }
+      );
     }
 
     const totalVendorOrders = vendorOrders.length;
-    const readyVendorOrders = vendorOrders.filter((vendorOrder) => isReadyStatus(vendorOrder.status)).length;
+    const readyVendorOrders = vendorOrders.filter((vendorOrder) =>
+      isReadyStatus(vendorOrder.status)
+    ).length;
 
     return NextResponse.json(
       {
@@ -84,7 +84,8 @@ export async function GET(
         readiness: {
           totalVendorOrders,
           readyVendorOrders,
-          allReady: totalVendorOrders > 0 && totalVendorOrders === readyVendorOrders,
+          allReady:
+            totalVendorOrders > 0 && totalVendorOrders === readyVendorOrders,
         },
         vendorOrders,
         kwikTask,
@@ -92,7 +93,9 @@ export async function GET(
       { status: 200 }
     );
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Something went wrong";
+    const message =
+      error instanceof Error ? error.message : "Something went wrong";
+
     return NextResponse.json({ ok: false, message }, { status: 400 });
   }
 }

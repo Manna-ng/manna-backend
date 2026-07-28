@@ -96,7 +96,7 @@ export async function buildInvoicePdfStyled(orderId: string) {
     boxWidth: number,
     align: "left" | "right"
   ) {
-    const originalSize = (doc as any)._fontSize as number;
+    const originalSize = ((doc as unknown) as { _fontSize?: number })._fontSize as number;
     const w = doc.widthOfString(text);
 
     // Safety shrink if it ever exceeds box width
@@ -111,7 +111,7 @@ export async function buildInvoicePdfStyled(orderId: string) {
     doc.text(text, drawX, y, { lineBreak: false });
 
     // restore
-    if ((doc as any)._fontSize !== originalSize) doc.fontSize(originalSize);
+    if (((doc as unknown) as { _fontSize?: number })._fontSize !== originalSize) doc.fontSize(originalSize);
   }
 
   // =========================

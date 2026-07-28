@@ -4,7 +4,6 @@ import { slugify } from "@/lib/slug";
 import { requireAdmin } from "@/lib/auth/requireAdmin";
 import {
   isJsonObject,
-  optionalBoolean,
   optionalNumber,
   optionalString,
 } from "@/lib/marketplace/json";

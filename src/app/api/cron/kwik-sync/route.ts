@@ -83,9 +83,11 @@ export async function GET(req: Request) {
           deliveryData.kwikTrackingUrl = String(kwik.tracking_url);
         }
 
-        if (kwik.raw) {
-          deliveryData.kwikRawResponse = kwik.raw;
-        }
+       if (kwik.raw) {
+  deliveryData.kwikRawResponse = JSON.parse(
+    JSON.stringify(kwik.raw)
+  ) as Prisma.InputJsonValue;
+}
 
         if (shouldUpdateStatus) {
           deliveryData.status = newDeliveryStatus;

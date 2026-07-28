@@ -1193,12 +1193,12 @@ model MediaAsset {
 
   storageProvider MediaStorageProvider @default(FIREBASE_STORAGE)
   bucket          String
-  storagePath     String @unique
+  storagePath     String               @unique
   downloadToken   String?
   publicUrl       String?
 
   mediaType        MediaType
-  purpose          String @default("GENERAL")
+  purpose          String    @default("GENERAL")
   contentType      String
   originalFilename String?
   sizeBytes        Int?
@@ -1206,19 +1206,19 @@ model MediaAsset {
   ownerType MediaOwnerType
   ownerId   String
 
-  productId      String?
-  vendorId       String?
-  orderId        String?
-  vendorOrderId  String?
-  feedbackId     String?
+  productId        String?
+  vendorId         String?
+  orderId          String?
+  vendorOrderId    String?
+  feedbackId       String?
   uploadedByUserId String?
 
-  approvalStatus   MediaApprovalStatus @default(PENDING_REVIEW)
-  approvedAt       DateTime?
+  approvalStatus    MediaApprovalStatus @default(PENDING_REVIEW)
+  approvedAt        DateTime?
   approvedByAdminId String?
-  rejectedAt       DateTime?
-  rejectionReason  String?
-  deletedAt        DateTime?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  deletedAt         DateTime?
 
   metadata Json?
 

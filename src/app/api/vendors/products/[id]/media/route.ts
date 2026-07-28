@@ -14,7 +14,7 @@ async function getUser(): Promise<AuthUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("manna_token")?.value;
   if (!token) return null;
-  return verifyAuthToken(token) as Promise<AuthUser | null>;
+  return verifyAuthToken(token) as AuthUser | null;
 }
 
 export async function GET(
