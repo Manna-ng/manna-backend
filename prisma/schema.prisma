@@ -176,6 +176,8 @@ model User {
   apiConsoleExecutionLogs       ApiConsoleExecutionLog[]
   apiConsoleExecutionRateLimits ApiConsoleExecutionRateLimit[]
 
+  oauthAccounts CustomerOAuthAccount[]
+
   vendorUsers VendorUser[]
 
   faceImageUrl   String?
@@ -1236,4 +1238,25 @@ model MediaAsset {
   @@index([uploadedByUserId])
   @@index([approvalStatus])
   @@index([createdAt])
+}
+
+model CustomerOAuthAccount {
+  id String @id @default(uuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  provider          String
+  providerAccountId String
+
+  email         String?
+  emailVerified Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@index([provider])
+  @@index([email])
 }

@@ -26,7 +26,7 @@ type KwikViewTaskResponse = {
 type DeliveryForSync = {
   id: string;
   orderId: string;
-  kwikUniqueOrderId: string | null;
+  kwikUniqueOrderId: string;
   kwikJobStatus: number | null;
 };
 
@@ -137,7 +137,7 @@ async function fetchKwikTaskDetails(
 }
 
 async function getDeliveryForSync(deliveryId: string): Promise<DeliveryForSync> {
-  const delivery = (await prisma.delivery.findUnique({
+  const delivery = await prisma.delivery.findUnique({
     where: { id: deliveryId },
     select: {
       id: true,
@@ -145,17 +145,24 @@ async function getDeliveryForSync(deliveryId: string): Promise<DeliveryForSync> 
       kwikUniqueOrderId: true,
       kwikJobStatus: true,
     },
-  })) as DeliveryForSync | null;
+  });
 
   if (!delivery) {
     throw new Error("Delivery not found.");
   }
 
-  if (!delivery.kwikUniqueOrderId) {
+  const kwikUniqueOrderId = delivery.kwikUniqueOrderId;
+
+  if (!kwikUniqueOrderId) {
     throw new Error("Delivery does not have a Kwik unique order ID.");
   }
 
-  return delivery;
+  return {
+    id: delivery.id,
+    orderId: delivery.orderId,
+    kwikUniqueOrderId,
+    kwikJobStatus: delivery.kwikJobStatus,
+  };
 }
 
 export async function syncKwikDeliveryStatusByDeliveryId(

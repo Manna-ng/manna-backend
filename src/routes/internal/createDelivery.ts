@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma"
 import { createKwikDelivery } from "@/services/kwikWebhook"
 
+function getKwikVehicleId(): number {
+  const vehicleId = Number(process.env.KWIK_VEHICLE_ID ?? "1");
+  return Number.isFinite(vehicleId) && vehicleId > 0 ? vehicleId : 1;
+}
+
 export async function createDelivery(orderId: string, deliveryLat: number, deliveryLng: number) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -17,24 +22,25 @@ export async function createDelivery(orderId: string, deliveryLat: number, deliv
     throw new Error("deliveryLat and deliveryLng are required")
   }
 
-  const kwik = await createKwikDelivery({
-    orderId: order.id,
-    customerName: order.user?.name ?? "Customer",
-    customerPhone: order.user?.phone ?? "N/A",
-    address: order.deliveryAddress1,
-    city: order.city,
-    state: order.state,
-    deliveryLat,
-    deliveryLng,
-    amountNgn: order.deliveryFeeNgn, // optional for kwik (pricing returns per_task_cost anyway)
-  })
+ const kwik = await createKwikDelivery({
+  orderId: order.id,
+  customerName: order.user?.name ?? "Customer",
+  customerPhone: order.user?.phone ?? "N/A",
+  address: order.deliveryAddress1,
+  city: order.city,
+  state: order.state,
+  deliveryLat,
+  deliveryLng,
+  amountNgn: order.deliveryFeeNgn,
+  vehicleId: getKwikVehicleId(),
+});
 
   const delivery = await prisma.delivery.create({
     data: {
       orderId: order.id,
       kwikTaskId: kwik.taskId,
       kwikTrackingUrl: kwik.trackingUrl,
-      kwikRawResponse: kwik.raw,
+      kwikRawResponse: JSON.parse(JSON.stringify(kwik.raw)) as never,
       status: "CREATED",
       partner: "KWIK",
     },
