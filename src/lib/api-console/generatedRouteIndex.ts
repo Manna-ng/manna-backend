@@ -232,8 +232,43 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
   },
   {
     "method": "POST",
+    "path": "/api/auth/password/forgot",
+    "sourceFile": "src/app/api/auth/password/forgot/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/password/forgot/resend",
+    "sourceFile": "src/app/api/auth/password/forgot/resend/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/password/forgot/verify",
+    "sourceFile": "src/app/api/auth/password/forgot/verify/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/password/reset",
+    "sourceFile": "src/app/api/auth/password/reset/route.ts"
+  },
+  {
+    "method": "POST",
     "path": "/api/auth/register",
     "sourceFile": "src/app/api/auth/register/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/register/resend",
+    "sourceFile": "src/app/api/auth/register/resend/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/register/verify",
+    "sourceFile": "src/app/api/auth/register/verify/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/b2b/leads",
+    "sourceFile": "src/app/api/b2b/leads/route.ts"
   },
   {
     "method": "POST",
@@ -291,6 +326,11 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/internal/order/[orderid]/create-delivery/route.ts"
   },
   {
+    "method": "GET",
+    "path": "/api/me/cart/count",
+    "sourceFile": "src/app/api/me/cart/count/route.ts"
+  },
+  {
     "method": "POST",
     "path": "/api/me/cart/items",
     "sourceFile": "src/app/api/me/cart/items/route.ts"
@@ -314,6 +354,21 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "GET",
     "path": "/api/me/dashboard",
     "sourceFile": "src/app/api/me/dashboard/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/me/profile",
+    "sourceFile": "src/app/api/me/profile/route.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/me/profile",
+    "sourceFile": "src/app/api/me/profile/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/newsletter/subscribe",
+    "sourceFile": "src/app/api/newsletter/subscribe/route.ts"
   },
   {
     "method": "GET",
@@ -396,6 +451,16 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/orders/[id]/receipt/email/route.ts"
   },
   {
+    "method": "GET",
+    "path": "/api/orders/[id]/reviews",
+    "sourceFile": "src/app/api/orders/[id]/reviews/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/orders/[id]/reviews",
+    "sourceFile": "src/app/api/orders/[id]/reviews/route.ts"
+  },
+  {
     "method": "POST",
     "path": "/api/orders/[id]/status",
     "sourceFile": "src/app/api/orders/[id]/status/route.ts"
@@ -432,8 +497,18 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
   },
   {
     "method": "GET",
+    "path": "/api/products/[slug]/reviews",
+    "sourceFile": "src/app/api/products/[slug]/reviews/route.ts"
+  },
+  {
+    "method": "GET",
     "path": "/api/vendors",
     "sourceFile": "src/app/api/vendors/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/vendors/[slug]/reviews",
+    "sourceFile": "src/app/api/vendors/[slug]/reviews/route.ts"
   },
   {
     "method": "GET",
@@ -492,6 +567,31 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
   },
   {
     "method": "GET",
+    "path": "/api/vendors/products",
+    "sourceFile": "src/app/api/vendors/products/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/products",
+    "sourceFile": "src/app/api/vendors/products/route.ts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/vendors/products/[id]",
+    "sourceFile": "src/app/api/vendors/products/[id]/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/vendors/products/[id]",
+    "sourceFile": "src/app/api/vendors/products/[id]/route.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/vendors/products/[id]",
+    "sourceFile": "src/app/api/vendors/products/[id]/route.ts"
+  },
+  {
+    "method": "GET",
     "path": "/api/vendors/products/[id]/media",
     "sourceFile": "src/app/api/vendors/products/[id]/media/route.ts"
   },
@@ -504,6 +604,21 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "DELETE",
     "path": "/api/vendors/products/[id]/media/[mediaId]",
     "sourceFile": "src/app/api/vendors/products/[id]/media/[mediaId]/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/products/[id]/variants",
+    "sourceFile": "src/app/api/vendors/products/[id]/variants/route.ts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/vendors/products/[id]/variants/[variantId]",
+    "sourceFile": "src/app/api/vendors/products/[id]/variants/[variantId]/route.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/vendors/products/[id]/variants/[variantId]",
+    "sourceFile": "src/app/api/vendors/products/[id]/variants/[variantId]/route.ts"
   },
   {
     "method": "POST",

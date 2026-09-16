@@ -4,7 +4,6 @@ import type { Prisma } from "@prisma/client";
 import { getKwikJobStatus } from "@/services/kwikWebhook";
 import {
   canMoveForward,
-  computeNextCheck,
   mapKwikStatusToDeliveryStatus,
 } from "@/lib/kwik-status";
 
@@ -51,7 +50,6 @@ export async function GET(req: Request) {
     const results: ResultEntry[] = [];
 
     for (const d of deliveries) {
-      const attempt = d.statusCheckAttempts ?? 0;
 
       try {
         const jobId = d.kwikTaskId!;
@@ -137,7 +135,7 @@ export async function GET(req: Request) {
             : "ignored_backward_or_terminal_transition",
           usedEndpoint: kwik.usedEndpoint,
         });
-      } catch (err: unknown) {
+      } catch {
         // ✅ staging-safe fallback
         await prisma.delivery.update({
           where: { id: d.id },

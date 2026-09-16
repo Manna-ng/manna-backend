@@ -7,6 +7,7 @@ datasource db {
   url       = env("DATABASE_URL")
   // Optional but recommended for Neon:
   directUrl = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 enum UserRole {
@@ -161,6 +162,16 @@ enum MediaApprovalStatus {
   DELETED
 }
 
+enum AuthOtpPurpose {
+  SIGNUP
+  PASSWORD_RESET
+}
+
+enum ReviewStatus {
+  PUBLISHED
+  HIDDEN
+}
+
 model User {
   id                    String    @id @default(uuid())
   name                  String
@@ -186,7 +197,12 @@ model User {
 
   orders Order[]
 
-  // ✅ persistent cart (1 cart per user)
+  productReviews ProductReview[]
+  vendorReviews  VendorReview[]
+
+  deliveryProfile CustomerDeliveryProfile?
+
+  // âœ… persistent cart (1 cart per user)
   cart Cart?
 
   createdAt DateTime @default(now())
@@ -194,6 +210,28 @@ model User {
 
   @@index([phone])
   @@index([email])
+}
+
+model CustomerDeliveryProfile {
+  id String @id @default(uuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  address1 String
+  address2 String?
+  city     String
+  state    String
+
+  latitude  Float?
+  longitude Float?
+
+  deliveryNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model Product {
@@ -221,11 +259,16 @@ model Product {
   variants   ProductVariant[]
   orderItems OrderItem[]
 
-  // ✅ cart items
+  // âœ… cart items
   cartItems CartItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  ratingAverage Float @default(0)
+  ratingCount   Int   @default(0)
+
+  reviews ProductReview[]
 
   @@index([category])
   @@index([subCategory])
@@ -249,7 +292,7 @@ model ProductVariant {
 
   orderItems OrderItem[]
 
-  // ✅ cart items
+  // âœ… cart items
   cartItems CartItem[]
 
   createdAt DateTime @default(now())
@@ -309,15 +352,17 @@ model Order {
   mannaCommissionAmountNgn Int       @default(0)
   vendorPayableAmountNgn   Int       @default(0)
 
-  // ✅ NEW: weight snapshot for ops/audit (optional but very useful)
+  // âœ… NEW: weight snapshot for ops/audit (optional but very useful)
   totalWeightKg Float?
 
   items    OrderItem[]
   delivery Delivery?
   payments PaymentAttempt[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  productReviews ProductReview[]
+  vendorReviews  VendorReview[]
 
   @@index([userId])
   @@index([status])
@@ -333,7 +378,7 @@ model Delivery {
   partner DeliveryPartner @default(KWIK)
   status  DeliveryStatus  @default(CREATED)
 
-  // ✅ ADD THESE HERE
+  // âœ… ADD THESE HERE
   processingStatus       DeliveryProcessingStatus @default(PENDING)
   requiresManualDispatch Boolean                  @default(false)
   scheduledDispatchAt    DateTime?
@@ -355,7 +400,7 @@ model Delivery {
   deliveredAt            DateTime?
   kwikLastTerminalStatus Int?
 
-  // ✅ NEW: chosen vehicle for this delivery
+  // âœ… NEW: chosen vehicle for this delivery
   kwikVehicleId    Int?
   kwikVehicleLabel String? // BIKE | SUV | VAN
   totalWeightKg    Float? // snapshot at dispatch time
@@ -655,11 +700,73 @@ model OrderItem {
   productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
   productVariantId String?
 
+  productReview ProductReview?
+
   quantity     Int
   unitPriceNgn Int
   subtotalNgn  Int
 
   createdAt DateTime @default(now())
+}
+
+model ProductReview {
+  id String @id @default(uuid())
+
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  orderItemId String    @unique
+
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  rating  Int
+  comment String?
+
+  status ReviewStatus @default(PUBLISHED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, status])
+  @@index([userId])
+  @@index([orderId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model VendorReview {
+  id String @id @default(uuid())
+
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+  vendorId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  rating  Int
+  comment String?
+
+  status ReviewStatus @default(PUBLISHED)
+
+  vendorReply     String?
+  vendorRepliedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, vendorId])
+  @@index([vendorId, status])
+  @@index([userId])
+  @@index([rating])
+  @@index([createdAt])
 }
 
 model Discount {
@@ -687,13 +794,19 @@ model Discount {
 }
 
 model B2BLead {
-  id               String  @id @default(uuid())
-  businessName     String
-  contactPerson    String
-  email            String?
-  phone            String
-  message          String?
+  id            String  @id @default(uuid())
+  businessName  String
+  contactPerson String
+  email         String?
+  phone         String
+
+  businessType   String?
+  orderFrequency String?
+
+  // Kept for backwards compatibility with the original model.
   estMonthlyVolume String?
+
+  message String?
 
   status LeadStatus @default(NEW)
 
@@ -701,6 +814,8 @@ model B2BLead {
 
   @@index([status])
   @@index([phone])
+  @@index([email])
+  @@index([createdAt])
 }
 
 model SiteSettings {
@@ -715,7 +830,7 @@ model SiteSettings {
 }
 
 //
-// ✅ Persistent Cart
+// âœ… Persistent Cart
 // - 1 cart per user (userId is unique on Cart)
 // - Prevent duplicates via unique constraint (cartId + productId + productVariantId)
 //
@@ -754,7 +869,7 @@ model CartItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ✅ prevents duplicates for same product+variant in same cart
+  // âœ… prevents duplicates for same product+variant in same cart
   // Note: Postgres allows multiple NULLs in unique constraints,
   // so variant=null rows may still duplicate. We'll handle that in API with upsert logic.
   @@unique([cartId, productId, productVariantId])
@@ -843,6 +958,11 @@ model Vendor {
   bankAccounts    VendorBankAccount[]
   pickupLocations VendorPickupLocation[]
   products        Product[]
+
+  ratingAverage Float @default(0)
+  ratingCount   Int   @default(0)
+
+  reviews VendorReview[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1259,4 +1379,37 @@ model CustomerOAuthAccount {
   @@index([userId])
   @@index([provider])
   @@index([email])
+}
+
+model AuthOtpChallenge {
+  id      String         @id @default(uuid())
+  purpose AuthOtpPurpose
+  email   String
+
+  // The OTP itself is never stored.
+  // Only an HMAC-SHA256 digest is stored.
+  codeHash String
+
+  // Used only while a customer signup is pending.
+  pendingName         String?
+  pendingPhone        String?
+  pendingPasswordHash String?
+
+  attempts Int @default(0)
+
+  sendCount           Int      @default(1)
+  sendWindowStartedAt DateTime @default(now())
+
+  expiresAt         DateTime
+  resendAvailableAt DateTime
+  consumedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([purpose, email])
+  @@index([email])
+  @@index([pendingPhone])
+  @@index([expiresAt])
+  @@index([consumedAt])
 }

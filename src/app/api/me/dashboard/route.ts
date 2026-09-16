@@ -1,13 +1,142 @@
-import { NextResponse } from "next/server";
+import { Prisma, type Discount } from "@prisma/client";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
+import { NextResponse, type NextRequest } from "next/server";
+
 import { verifyAuthToken } from "@/lib/auth";
+import {
+  parseCoordinatesFromSearchParams,
+  resolveMarketSelection,
+  type MarketSelectionSource,
+} from "@/lib/marketplace/marketSelection";
+import { prisma } from "@/lib/prisma";
+import {
+  applyDiscountToPriceNgn,
+  getActiveDiscounts,
+  getBestActiveDiscountForProduct,
+} from "@/services/discount.service";
 
 function unauthorized() {
   return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 }
 
-export async function GET() {
+function marketplaceProductWhere(marketClusterId?: string | null): Prisma.ProductWhereInput {
+  return {
+    isActive: true,
+    approvalStatus: "APPROVED",
+    ...(marketClusterId ? { marketClusterId } : {}),
+    OR: [
+      { vendorId: null },
+      {
+        vendor: {
+          status: "APPROVED",
+          isActive: true,
+          isVisible: true,
+        },
+      },
+    ],
+  };
+}
+
+function serializeDiscount(discount: Discount | null) {
+  if (!discount) return null;
+
+  return {
+    id: discount.id,
+    title: discount.title,
+    description: discount.description,
+    type: discount.type,
+    percentageOff: discount.percentageOff,
+    fixedAmountOff: discount.fixedAmountOff,
+    startsAt: discount.startsAt,
+    endsAt: discount.endsAt,
+  };
+}
+
+const productSelect = {
+  id: true,
+  name: true,
+  slug: true,
+  category: true,
+  subCategory: true,
+  imageUrl: true,
+  isFeatured: true,
+  ratingAverage: true,
+  ratingCount: true,
+  marketClusterId: true,
+  createdAt: true,
+  updatedAt: true,
+  vendor: {
+    select: {
+      id: true,
+      displayName: true,
+      slug: true,
+      logoUrl: true,
+      ratingAverage: true,
+      ratingCount: true,
+    },
+  },
+  marketCluster: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      city: true,
+      state: true,
+      centerAddress: true,
+    },
+  },
+  variants: {
+    orderBy: { priceNgn: "asc" as const },
+    select: {
+      id: true,
+      name: true,
+      unit: true,
+      unitWeightKg: true,
+      priceNgn: true,
+      stockQty: true,
+    },
+  },
+} satisfies Prisma.ProductSelect;
+
+type DashboardProduct = Prisma.ProductGetPayload<{ select: typeof productSelect }>;
+
+function serializeProduct(product: DashboardProduct, discounts: Discount[]) {
+  const discount = getBestActiveDiscountForProduct(discounts, product.id);
+
+  return {
+    ...product,
+    seller: {
+      name: product.vendor?.displayName ?? "Manna",
+      vendorId: product.vendor?.id ?? null,
+      vendorSlug: product.vendor?.slug ?? null,
+      logoUrl: product.vendor?.logoUrl ?? null,
+      rating: {
+        average: product.vendor?.ratingAverage ?? 0,
+        count: product.vendor?.ratingCount ?? 0,
+      },
+    },
+    rating: {
+      average: product.ratingAverage,
+      count: product.ratingCount,
+    },
+    discount: serializeDiscount(discount),
+    variants: product.variants.map((variant) => {
+      const originalPriceNgn = variant.priceNgn;
+      const discountedPriceNgn = discount
+        ? applyDiscountToPriceNgn(originalPriceNgn, discount)
+        : originalPriceNgn;
+
+      return {
+        ...variant,
+        originalPriceNgn,
+        discountedPriceNgn,
+        hasDiscount: discountedPriceNgn < originalPriceNgn,
+      };
+    }),
+  };
+}
+
+export async function GET(req: NextRequest) {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get("manna_token")?.value;
@@ -15,213 +144,348 @@ export async function GET() {
     if (!token) return unauthorized();
 
     const decoded = verifyAuthToken(token);
-    if (!decoded?.userId) return unauthorized();
+    if (!decoded?.userId || decoded.role !== "CUSTOMER") return unauthorized();
 
-    const now = new Date();
+    const coordinateInput = parseCoordinatesFromSearchParams(req.nextUrl.searchParams);
+    if (coordinateInput.error) {
+      return NextResponse.json({ message: coordinateInput.error }, { status: 400 });
+    }
 
-    // 1) User basic
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        email: true,
-        role: true,
-        isFaceCaptured: true,
-        isFaceVerified: true,
-        createdAt: true,
-      },
-    });
+    const requestedMarketClusterId = req.nextUrl.searchParams.get("marketClusterId")?.trim() || null;
+
+    const [user, cart, recentOrders] = await Promise.all([
+      prisma.user.findFirst({
+        where: { id: decoded.userId, role: "CUSTOMER" },
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          role: true,
+          isFaceCaptured: true,
+          isFaceVerified: true,
+          createdAt: true,
+          deliveryProfile: {
+            select: {
+              address1: true,
+              address2: true,
+              city: true,
+              state: true,
+              latitude: true,
+              longitude: true,
+              deliveryNote: true,
+            },
+          },
+        },
+      }),
+      prisma.cart.findUnique({
+        where: { userId: decoded.userId },
+        select: {
+          id: true,
+          marketClusterId: true,
+          _count: { select: { items: true } },
+          marketCluster: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              city: true,
+              state: true,
+            },
+          },
+        },
+      }),
+      prisma.order.findMany({
+        where: { userId: decoded.userId },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          orderNumber: true,
+          status: true,
+          paymentStatus: true,
+          totalAmountNgn: true,
+          deliveryFeeNgn: true,
+          deliveryAddress1: true,
+          deliveryAddress2: true,
+          city: true,
+          state: true,
+          deliveryLat: true,
+          deliveryLng: true,
+          deliveryEstimate: true,
+          createdAt: true,
+          marketCluster: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              city: true,
+              state: true,
+            },
+          },
+          delivery: {
+            select: {
+              id: true,
+              status: true,
+              kwikTrackingUrl: true,
+              kwikTaskId: true,
+              deliveredAt: true,
+            },
+          },
+          items: {
+            take: 3,
+            select: {
+              id: true,
+              quantity: true,
+              unitPriceNgn: true,
+              subtotalNgn: true,
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  imageUrl: true,
+                  slug: true,
+                },
+              },
+              productVariant: {
+                select: {
+                  id: true,
+                  name: true,
+                  unit: true,
+                  unitWeightKg: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
 
     if (!user) return unauthorized();
 
-    // 2) Active discounts (global for everyone)
-    const activeDiscounts = await prisma.discount.findMany({
-      where: {
-        isActive: true,
-        AND: [
-          { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
-          { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
-        ],
-      },
-      orderBy: [{ updatedAt: "desc" }],
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        type: true,
-        percentageOff: true,
-        fixedAmountOff: true,
-        appliesToAll: true,
-        productIds: true,
-        startsAt: true,
-        endsAt: true,
-      },
-      take: 3, // keep UI clean; increase if you want
-    });
+    const latestOrder = recentOrders[0] ?? null;
+    const profileLatitude = user.deliveryProfile?.latitude;
+    const profileLongitude = user.deliveryProfile?.longitude;
+    const profileCoordinates =
+      profileLatitude !== null &&
+      profileLatitude !== undefined &&
+      profileLongitude !== null &&
+      profileLongitude !== undefined
+        ? { lat: profileLatitude, lng: profileLongitude }
+        : null;
+    const lastOrderCoordinates =
+      latestOrder?.deliveryLat !== null &&
+      latestOrder?.deliveryLat !== undefined &&
+      latestOrder.deliveryLng !== null &&
+      latestOrder.deliveryLng !== undefined
+        ? { lat: latestOrder.deliveryLat, lng: latestOrder.deliveryLng }
+        : null;
 
-    // 3) Categories + subcategories map (for “feature categories” section)
-    const categoryPairs = await prisma.product.findMany({
-      where: { isActive: true },
-      select: { category: true, subCategory: true },
-      distinct: ["category", "subCategory"],
-    });
+    let source: MarketSelectionSource = "NONE";
+    let marketClusterId: string | null = null;
 
-    // Build: [{ name: "Fruits", subCategories: ["Citrus", "Berries"] }, ...]
-    const categoryMap = new Map<string, Set<string>>();
-    for (const row of categoryPairs) {
-      const cat = row.category?.trim();
-      if (!cat) continue;
-      if (!categoryMap.has(cat)) categoryMap.set(cat, new Set());
-
-      const sub = row.subCategory?.trim();
-      if (sub) categoryMap.get(cat)!.add(sub);
+    if (requestedMarketClusterId) {
+      source = "EXPLICIT";
+      marketClusterId = requestedMarketClusterId;
+    } else if (cart?.marketClusterId && cart._count.items > 0) {
+      source = "CART";
+      marketClusterId = cart.marketClusterId;
+    } else if (coordinateInput.coordinates) {
+      source = "COORDINATES";
+    } else if (profileCoordinates) {
+      source = "PROFILE";
+    } else if (lastOrderCoordinates) {
+      source = "LAST_ORDER";
     }
 
-    const categories = Array.from(categoryMap.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([name, subs]) => ({
-        name,
-        subCategories: Array.from(subs).sort((a, b) => a.localeCompare(b)),
-      }));
+    const selectionCoordinates = coordinateInput.coordinates ?? profileCoordinates ?? lastOrderCoordinates;
 
-    // 4) Featured products (explicitly curated)
-    const featuredProducts = await prisma.product.findMany({
-      where: { isActive: true, isFeatured: true },
-      orderBy: [{ updatedAt: "desc" }],
-      take: 8,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        category: true,
-        subCategory: true,
-        imageUrl: true,
-        isFeatured: true,
-        variants: {
-          orderBy: [{ priceNgn: "asc" }],
-          take: 1, // cheapest variant as “starting price”
-          select: { id: true, name: true, priceNgn: true, unit: true, unitWeightKg: true, stockQty: true },
-        },
-      },
-    });
-
-    // 5) Most ordered products (data-driven)
-    const topOrdered = await prisma.orderItem.groupBy({
-      by: ["productId"],
-      _sum: { quantity: true },
-      orderBy: { _sum: { quantity: "desc" } },
-      take: 8,
-    });
-
-    const topProductIds = topOrdered.map((x) => x.productId);
-    const topProductsRaw = topProductIds.length
-      ? await prisma.product.findMany({
-          where: { id: { in: topProductIds }, isActive: true },
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            category: true,
-            subCategory: true,
-            imageUrl: true,
-            variants: {
-              orderBy: [{ priceNgn: "asc" }],
-              take: 1,
-              select: { id: true, name: true, priceNgn: true, unit: true, unitWeightKg: true, stockQty: true },
-            },
-          },
+    const marketSelection = marketClusterId
+      ? await resolveMarketSelection({
+          marketClusterId,
+          coordinates: selectionCoordinates,
+          source: source === "CART" ? "CART" : "EXPLICIT",
         })
-      : [];
+      : await resolveMarketSelection({
+          coordinates: selectionCoordinates,
+        });
 
-    // Keep the same ranking order as groupBy result
-    const qtyMap = new Map<string, number>();
-    for (const row of topOrdered) qtyMap.set(row.productId, row._sum.quantity ?? 0);
+    if (marketClusterId && !marketSelection.selectedMarket) {
+      return NextResponse.json({ message: "Market cluster not found or inactive" }, { status: 404 });
+    }
 
-    const topProductsByPopularity = topProductIds
-      .map((id) => {
-        const p = topProductsRaw.find((x) => x.id === id);
-        if (!p) return null;
-        return { ...p, totalOrderedQty: qtyMap.get(id) ?? 0 };
-      })
-      .filter(Boolean);
+    const normalizedSource: MarketSelectionSource =
+      source === "PROFILE" && marketSelection.source === "COORDINATES"
+        ? "PROFILE"
+        : source === "LAST_ORDER" && marketSelection.source === "COORDINATES"
+          ? "LAST_ORDER"
+          : source === "COORDINATES" && marketSelection.source === "COORDINATES"
+            ? "COORDINATES"
+            : marketSelection.source;
 
-    // 6) Order summary (for quick dashboard stats)
-    const [pendingPaymentCount, processingCount, outForDeliveryCount, deliveredCount] =
-      await Promise.all([
-        prisma.order.count({
-          where: { userId: user.id, status: "PENDING_PAYMENT" },
+    const locationWasUsed = Boolean(selectionCoordinates);
+    const locationOutsideServiceArea =
+      locationWasUsed &&
+      !marketClusterId &&
+      marketSelection.serviceable === false;
+
+    const selectedMarketClusterId = marketSelection.selectedMarket?.id ?? null;
+    const catalogWhere = marketplaceProductWhere(selectedMarketClusterId);
+
+    const activeDiscounts = await getActiveDiscounts();
+
+    let categories: Array<{ name: string; imageUrl: string | null; subCategories: string[] }> = [];
+    let featuredProducts: ReturnType<typeof serializeProduct>[] = [];
+    let mostOrderedProducts: Array<ReturnType<typeof serializeProduct> & { totalOrderedQty: number }> = [];
+
+    if (!locationOutsideServiceArea) {
+      const [categoryPairs, categoryImageRows, featuredProductsRaw, topOrdered] = await Promise.all([
+        prisma.product.findMany({
+          where: catalogWhere,
+          select: { category: true, subCategory: true },
+          distinct: ["category", "subCategory"],
         }),
-        prisma.order.count({
-          where: { userId: user.id, status: "PROCESSING" },
+        prisma.product.findMany({
+          where: {
+            ...catalogWhere,
+            imageUrl: { not: null },
+          },
+          orderBy: { updatedAt: "desc" },
+          select: { category: true, imageUrl: true },
         }),
-        prisma.order.count({
-          where: { userId: user.id, status: "OUT_FOR_DELIVERY" },
+        prisma.product.findMany({
+          where: {
+            ...catalogWhere,
+            isFeatured: true,
+          },
+          orderBy: [{ ratingAverage: "desc" }, { updatedAt: "desc" }],
+          take: 8,
+          select: productSelect,
         }),
-        prisma.order.count({
-          where: { userId: user.id, status: "DELIVERED" },
+        prisma.orderItem.groupBy({
+          by: ["productId"],
+          where: { product: catalogWhere },
+          _sum: { quantity: true },
+          orderBy: { _sum: { quantity: "desc" } },
+          take: 8,
         }),
       ]);
 
-    // 7) Recent orders (for quick “Your recent activity”)
-    const recentOrders = await prisma.order.findMany({
-      where: { userId: user.id },
-      orderBy: [{ createdAt: "desc" }],
-      take: 5,
-      select: {
-        id: true,
-        orderNumber: true,
-        status: true,
-        paymentStatus: true,
-        totalAmountNgn: true,
-        deliveryFeeNgn: true,
-        city: true,
-        state: true,
-        deliveryEstimate: true,
-        createdAt: true,
-        delivery: {
-          select: {
-            id: true,
-            status: true,
-            kwikTrackingUrl: true,
-            kwikTaskId: true,
-            kwikUniqueOrderId: true,
-            deliveredAt: true,
-          },
-        },
-        items: {
-          take: 3, // “brief preview” of items
-          select: {
-            id: true,
-            quantity: true,
-            unitPriceNgn: true,
-            subtotalNgn: true,
-            product: { select: { id: true, name: true, imageUrl: true, slug: true } },
-            productVariant: { select: { id: true, name: true, unit: true, unitWeightKg: true } },
-          },
-        },
-      },
-    });
+      const categoryMap = new Map<string, Set<string>>();
+      for (const row of categoryPairs) {
+        const category = row.category.trim();
+        if (!category) continue;
+        if (!categoryMap.has(category)) categoryMap.set(category, new Set());
+        const subCategory = row.subCategory?.trim();
+        if (subCategory) categoryMap.get(category)!.add(subCategory);
+      }
 
-    return NextResponse.json(
-      {
-        user,
-        discounts: activeDiscounts,
-        categories,
-        featuredProducts,
-        mostOrderedProducts: topProductsByPopularity,
-        orderSummary: {
-          pendingPayment: pendingPaymentCount,
-          processing: processingCount,
-          outForDelivery: outForDeliveryCount,
-          delivered: deliveredCount,
-        },
-        recentOrders,
-        // cartSummary: null // needs schema (see below)
+      const categoryImageMap = new Map<string, string>();
+      for (const row of categoryImageRows) {
+        const image = row.imageUrl?.trim();
+        if (image && !categoryImageMap.has(row.category)) {
+          categoryImageMap.set(row.category, image);
+        }
+      }
+
+      categories = Array.from(categoryMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, subCategories]) => ({
+          name,
+          imageUrl: categoryImageMap.get(name) ?? null,
+          subCategories: Array.from(subCategories).sort((a, b) => a.localeCompare(b)),
+        }));
+
+      featuredProducts = featuredProductsRaw.map((product) =>
+        serializeProduct(product, activeDiscounts)
+      );
+
+      const topProductIds = topOrdered.map((row) => row.productId);
+      const topProductsRaw = topProductIds.length
+        ? await prisma.product.findMany({
+            where: {
+              ...catalogWhere,
+              id: { in: topProductIds },
+            },
+            select: productSelect,
+          })
+        : [];
+
+      const quantityMap = new Map(
+        topOrdered.map((row) => [row.productId, row._sum.quantity ?? 0])
+      );
+
+      mostOrderedProducts = topProductIds
+        .map((productId) => {
+          const product = topProductsRaw.find((row) => row.id === productId);
+          if (!product) return null;
+          return {
+            ...serializeProduct(product, activeDiscounts),
+            totalOrderedQty: quantityMap.get(productId) ?? 0,
+          };
+        })
+        .filter((product): product is NonNullable<typeof product> => product !== null);
+    }
+
+    const [pendingPaymentCount, processingCount, outForDeliveryCount, deliveredCount] =
+      await Promise.all([
+        prisma.order.count({ where: { userId: user.id, status: "PENDING_PAYMENT" } }),
+        prisma.order.count({ where: { userId: user.id, status: "PROCESSING" } }),
+        prisma.order.count({ where: { userId: user.id, status: "OUT_FOR_DELIVERY" } }),
+        prisma.order.count({ where: { userId: user.id, status: "DELIVERED" } }),
+      ]);
+
+    const lastDeliveryLocation = user.deliveryProfile
+      ? {
+          address1: user.deliveryProfile.address1,
+          address2: user.deliveryProfile.address2,
+          city: user.deliveryProfile.city,
+          state: user.deliveryProfile.state,
+          lat: user.deliveryProfile.latitude,
+          lng: user.deliveryProfile.longitude,
+          label: [user.deliveryProfile.address1, user.deliveryProfile.city].filter(Boolean).join(", "),
+          source: "PROFILE" as const,
+        }
+      : latestOrder
+        ? {
+            address1: latestOrder.deliveryAddress1,
+            address2: latestOrder.deliveryAddress2,
+            city: latestOrder.city,
+            state: latestOrder.state,
+            lat: latestOrder.deliveryLat,
+            lng: latestOrder.deliveryLng,
+            label: [latestOrder.deliveryAddress1, latestOrder.city].filter(Boolean).join(", "),
+            source: "LAST_ORDER" as const,
+          }
+        : null;
+
+    return NextResponse.json({
+      user,
+      marketContext: {
+        source: normalizedSource,
+        serviceable: marketSelection.serviceable,
+        selectedMarket: marketSelection.selectedMarket,
+        nearestMarket: marketSelection.nearestMarket,
+        outsideServiceArea: locationOutsideServiceArea,
+        cartMarketCluster: cart?.marketCluster ?? null,
       },
-      { status: 200 }
-    );
+      cartSummary: {
+        itemCount: cart?._count.items ?? 0,
+        marketClusterId: cart?.marketClusterId ?? null,
+      },
+      lastDeliveryLocation,
+      discounts: activeDiscounts.slice(0, 3).map(serializeDiscount),
+      categories,
+      featuredProducts,
+      mostOrderedProducts,
+      orderSummary: {
+        pendingPayment: pendingPaymentCount,
+        processing: processingCount,
+        outForDelivery: outForDeliveryCount,
+        delivered: deliveredCount,
+      },
+      recentOrders,
+    });
   } catch (error) {
     console.error("ME_DASHBOARD_ERROR", error);
     return NextResponse.json({ message: "Something went wrong" }, { status: 500 });

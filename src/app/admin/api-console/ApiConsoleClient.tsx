@@ -5,7 +5,6 @@ import ExecutionPanel from "./ExecutionPanel";
 import {
   mannaApiRoutes,
   type ApiMethod,
-  type ApiRouteDefinition,
   type RouteSafety,
 } from "@/lib/api-console/routeRegistry";
 

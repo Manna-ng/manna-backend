@@ -1,26 +1,10 @@
-import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
+import { NextResponse } from "next/server";
+
 import { verifyAuthToken } from "@/lib/auth";
-import { isJsonObject, optionalString, requiredString, optionalNumber } from "@/lib/marketplace/json";
 import { quoteKwikMarketplaceDelivery } from "@/lib/kwik/quoteService";
 import type { VendorPickupInput } from "@/lib/kwik/payloadBuilder";
-
-function unauthorized() {
-  return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-}
-
-type DeliveryQuoteBody = {
-  deliveryAddress: string;
-  deliveryLat: number;
-  deliveryLng: number;
-  deliveryName: string;
-  deliveryPhone: string;
-  deliveryEmail?: string;
-  deliveryInstruction?: string;
-  vehicleId?: number;
-  vehicleName?: string;
-};
+import { prisma } from "@/lib/prisma";
 
 type PickupLocationForQuote = {
   id: string;
@@ -34,17 +18,21 @@ type PickupLocationForQuote = {
 type CartForQuote = {
   id: string;
   marketClusterId: string | null;
+
   marketCluster: {
     id: string;
     name: string;
     slug: string;
   } | null;
+
   items: Array<{
     quantity: number;
+
     product: {
       id: string;
       name: string;
       marketClusterId: string | null;
+
       vendor: {
         id: string;
         displayName: string;
@@ -53,6 +41,7 @@ type CartForQuote = {
         pickupLocations: PickupLocationForQuote[];
       } | null;
     };
+
     productVariant: {
       id: string;
       name: string;
@@ -62,246 +51,705 @@ type CartForQuote = {
   }>;
 };
 
-function parseBody(value: unknown): DeliveryQuoteBody | null {
-  if (!isJsonObject(value)) return null;
-
-  const deliveryAddress = requiredString(value.deliveryAddress);
-  const deliveryName = requiredString(value.deliveryName);
-  const deliveryPhone = requiredString(value.deliveryPhone);
-  const deliveryLat = optionalNumber(value.deliveryLat);
-  const deliveryLng = optionalNumber(value.deliveryLng);
-
-  if (!deliveryAddress || !deliveryName || !deliveryPhone || deliveryLat === null || deliveryLng === null) {
-    return null;
-  }
-
-  return {
-    deliveryAddress,
-    deliveryName,
-    deliveryPhone,
-    deliveryLat,
-    deliveryLng,
-    deliveryEmail: optionalString(value.deliveryEmail) ?? undefined,
-    deliveryInstruction: optionalString(value.deliveryInstruction) ?? undefined,
-    vehicleId: optionalNumber(value.vehicleId) ?? undefined,
-    vehicleName: optionalString(value.vehicleName) ?? undefined,
-  };
+function unauthorized() {
+  return NextResponse.json(
+    {
+      message: "Unauthorized",
+    },
+    {
+      status: 401,
+    }
+  );
 }
 
-function buildPickups(cart: CartForQuote): VendorPickupInput[] {
-  const pickups = new Map<string, VendorPickupInput>();
+function buildPickups(
+  cart: CartForQuote
+): VendorPickupInput[] {
+  const pickups =
+    new Map<
+      string,
+      VendorPickupInput
+    >();
 
   for (const item of cart.items) {
-    const vendor = item.product.vendor;
+    const vendor =
+      item.product.vendor;
 
     if (!vendor) {
-      throw new Error(`Product ${item.product.name} is not attached to an approved vendor`);
-    }
-
-    const pickupLocation = vendor.pickupLocations[0];
-
-    if (!pickupLocation) {
-      throw new Error(`${vendor.displayName} does not have an active pickup location`);
-    }
-
-    if (!pickups.has(vendor.id)) {
-      pickups.set(vendor.id, {
-        vendorId: vendor.id,
-        vendorName: vendor.displayName,
-        address: pickupLocation.address,
-        latitude: pickupLocation.latitude,
-        longitude: pickupLocation.longitude,
-        phone: pickupLocation.phone ?? vendor.phone ?? "+2340000000000",
-        email: vendor.email ?? undefined,
-      });
-    }
-  }
-
-  return Array.from(pickups.values());
-}
-
-function calculateParcelAmount(cart: CartForQuote): number {
-  return cart.items.reduce((total, item) => {
-    const unitPrice = item.productVariant?.priceNgn ?? 0;
-    return total + unitPrice * item.quantity;
-  }, 0);
-}
-
-export async function POST(req: NextRequest) {
-  try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("manna_token")?.value;
-
-    if (!token) return unauthorized();
-
-    const decoded = verifyAuthToken(token);
-    if (!decoded?.userId) return unauthorized();
-
-    const parsedBody = parseBody(await req.json());
-
-    if (!parsedBody) {
-      return NextResponse.json(
-        {
-          message:
-            "deliveryAddress, deliveryLat, deliveryLng, deliveryName and deliveryPhone are required",
-        },
-        { status: 400 }
+      throw new Error(
+        `Product ${item.product.name} is not attached to an approved vendor`
       );
     }
 
-    const cart = (await prisma.cart.findUnique({
-      where: { userId: decoded.userId },
-      select: {
-        id: true,
-        marketClusterId: true,
-        marketCluster: {
+    const pickupLocation =
+      vendor.pickupLocations[0];
+
+    if (!pickupLocation) {
+      throw new Error(
+        `${vendor.displayName} does not have an active pickup location`
+      );
+    }
+
+    const pickupPhone =
+      pickupLocation.phone ??
+      vendor.phone;
+
+    /**
+     * Don't send a fake phone number
+     * to Kwik.
+     *
+     * Every vendor participating in
+     * delivery must have a real pickup
+     * contact number.
+     */
+    if (!pickupPhone) {
+      throw new Error(
+        `${vendor.displayName} does not have a pickup contact phone number`
+      );
+    }
+
+    if (
+      !Number.isFinite(
+        pickupLocation.latitude
+      ) ||
+      !Number.isFinite(
+        pickupLocation.longitude
+      )
+    ) {
+      throw new Error(
+        `${vendor.displayName} has an invalid pickup location`
+      );
+    }
+
+    if (!pickups.has(vendor.id)) {
+      pickups.set(
+        vendor.id,
+        {
+          vendorId:
+            vendor.id,
+
+          vendorName:
+            vendor.displayName,
+
+          address:
+            pickupLocation.address,
+
+          latitude:
+            pickupLocation.latitude,
+
+          longitude:
+            pickupLocation.longitude,
+
+          phone:
+            pickupPhone,
+
+          email:
+            vendor.email ??
+            undefined,
+        }
+      );
+    }
+  }
+
+  return Array.from(
+    pickups.values()
+  );
+}
+
+function calculateParcelAmount(
+  cart: CartForQuote
+) {
+  return cart.items.reduce(
+    (total, item) =>
+      total +
+      (item.productVariant
+        ?.priceNgn ?? 0) *
+        item.quantity,
+    0
+  );
+}
+
+export async function POST() {
+  try {
+    const cookieStore =
+      await cookies();
+
+    const token =
+      cookieStore.get(
+        "manna_token"
+      )?.value;
+
+    if (!token) {
+      return unauthorized();
+    }
+
+    const decoded =
+      verifyAuthToken(token);
+
+    if (
+      !decoded?.userId ||
+      decoded.role !==
+        "CUSTOMER"
+    ) {
+      return unauthorized();
+    }
+
+    const [customer, cart] =
+      await Promise.all([
+        prisma.user.findFirst({
+          where: {
+            id: decoded.userId,
+            role: "CUSTOMER",
+          },
+
           select: {
             id: true,
             name: true,
-            slug: true,
+            phone: true,
+            email: true,
+
+            deliveryProfile: {
+              select: {
+                address1: true,
+                address2: true,
+                city: true,
+                state: true,
+                latitude: true,
+                longitude: true,
+                deliveryNote:
+                  true,
+              },
+            },
           },
-        },
-        items: {
+        }),
+
+        prisma.cart.findUnique({
+          where: {
+            userId:
+              decoded.userId,
+          },
+
           select: {
-            quantity: true,
-            product: {
+            id: true,
+            marketClusterId:
+              true,
+
+            marketCluster: {
               select: {
                 id: true,
                 name: true,
-                marketClusterId: true,
-                vendor: {
+                slug: true,
+              },
+            },
+
+            items: {
+              select: {
+                quantity: true,
+
+                product: {
                   select: {
                     id: true,
-                    displayName: true,
-                    email: true,
-                    phone: true,
-                    pickupLocations: {
-                      where: { isActive: true },
-                      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-                      take: 1,
+                    name: true,
+                    marketClusterId:
+                      true,
+
+                    vendor: {
                       select: {
                         id: true,
-                        address: true,
-                        latitude: true,
-                        longitude: true,
-                        contactName: true,
+                        displayName:
+                          true,
+                        email: true,
                         phone: true,
+
+                        pickupLocations:
+                          {
+                            where: {
+                              isActive:
+                                true,
+                            },
+
+                            orderBy:
+                              [
+                                {
+                                  isDefault:
+                                    "desc",
+                                },
+                                {
+                                  createdAt:
+                                    "asc",
+                                },
+                              ],
+
+                            take: 1,
+
+                            select:
+                              {
+                                id: true,
+                                address:
+                                  true,
+
+                                latitude:
+                                  true,
+
+                                longitude:
+                                  true,
+
+                                contactName:
+                                  true,
+
+                                phone:
+                                  true,
+                              },
+                          },
                       },
                     },
                   },
                 },
-              },
-            },
-            productVariant: {
-              select: {
-                id: true,
-                name: true,
-                unitWeightKg: true,
-                priceNgn: true,
+
+                productVariant:
+                  {
+                    select: {
+                      id: true,
+                      name: true,
+
+                      unitWeightKg:
+                        true,
+
+                      priceNgn:
+                        true,
+                    },
+                  },
               },
             },
           },
+        }),
+      ]);
+
+    if (!customer) {
+      return unauthorized();
+    }
+
+    /**
+     * Capture profile into a local
+     * variable before validating it.
+     *
+     * This gives TypeScript reliable
+     * narrowing.
+     */
+    const delivery =
+      customer.deliveryProfile;
+
+    if (
+      !customer.phone ||
+      !delivery ||
+      !delivery.address1?.trim() ||
+      !delivery.city?.trim() ||
+      !delivery.state?.trim()
+    ) {
+      return NextResponse.json(
+        {
+          code:
+            "DELIVERY_PROFILE_REQUIRED",
+
+          message:
+            "Complete your delivery details in My Manna Account before checkout.",
         },
-      },
-    })) as CartForQuote | null;
-
-    if (!cart || cart.items.length === 0) {
-      return NextResponse.json({ message: "Cart is empty" }, { status: 400 });
-    }
-
-    if (!cart.marketClusterId || !cart.marketCluster) {
-      return NextResponse.json(
-        { message: "Cart must be locked to one market cluster before delivery quote" },
-        { status: 400 }
+        {
+          status: 409,
+        }
       );
     }
 
-    const invalidClusterItem = cart.items.find(
-      (item) => item.product.marketClusterId !== cart.marketClusterId
-    );
+    /**
+     * Read coordinates into local
+     * variables before checking them.
+     *
+     * After this guard they are
+     * definitely `number`, not
+     * `number | null`.
+     */
+    const deliveryLatitude =
+      delivery.latitude;
 
-    if (invalidClusterItem) {
+    const deliveryLongitude =
+      delivery.longitude;
+
+    if (
+      deliveryLatitude ===
+        null ||
+      deliveryLongitude ===
+        null
+    ) {
       return NextResponse.json(
-        { message: "Cart contains an item outside the selected market cluster" },
-        { status: 409 }
+        {
+          code:
+            "DELIVERY_LOCATION_REQUIRED",
+
+          message:
+            "Use current location in My Manna Account so Manna can calculate your Kwik delivery.",
+        },
+        {
+          status: 409,
+        }
       );
     }
 
-    const pickups = buildPickups(cart);
+    /**
+     * Protect Kwik from malformed
+     * coordinates.
+     */
+    if (
+      !Number.isFinite(
+        deliveryLatitude
+      ) ||
+      !Number.isFinite(
+        deliveryLongitude
+      ) ||
+      deliveryLatitude < -90 ||
+      deliveryLatitude > 90 ||
+      deliveryLongitude <
+        -180 ||
+      deliveryLongitude > 180
+    ) {
+      return NextResponse.json(
+        {
+          code:
+            "DELIVERY_LOCATION_INVALID",
 
-    const quote = await quoteKwikMarketplaceDelivery({
-      pickups,
-      delivery: {
-        name: parsedBody.deliveryName,
-        phone: parsedBody.deliveryPhone,
-        email: parsedBody.deliveryEmail,
-        address: parsedBody.deliveryAddress,
-        latitude: parsedBody.deliveryLat,
-        longitude: parsedBody.deliveryLng,
-        instruction: parsedBody.deliveryInstruction,
-      },
-      vehicleId: parsedBody.vehicleId,
-      vehicleName: parsedBody.vehicleName,
-      parcelAmountNgn: calculateParcelAmount(cart),
-    });
+          message:
+            "Your saved delivery location is invalid. Please use current location again in My Manna Account.",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
 
-    const quoteExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    if (
+      !cart ||
+      cart.items.length === 0
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Cart is empty",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
 
-    const deliveryQuote = await prisma.deliveryQuote.create({
-      data: {
-        userId: decoded.userId,
-        cartId: cart.id,
-        marketClusterId: cart.marketClusterId,
-        pickupCount: quote.pickupCount,
-        deliveryCount: quote.deliveryCount,
-        currency: "NGN",
-        kwikPerTaskCostNgn: quote.kwikPerTaskCostNgn,
-        kwikTotalServiceChargeNgn: quote.kwikTotalServiceChargeNgn,
-        kwikPayableAmountNgn: quote.kwikPayableAmountNgn,
-        kwikNetPayableAmountNgn: quote.kwikNetPayableAmountNgn,
-        kwikDeliveryChargeNgn: quote.kwikDeliveryChargeNgn,
-        kwikSurgeCostNgn: quote.kwikSurgeCostNgn,
-        kwikSurgeType: quote.kwikSurgeType,
-        kwikVehicleId: quote.kwikVehicleId,
-        kwikVehicleName: quote.kwikVehicleName,
-        amountToChargeCustomerNgn: quote.amountToChargeCustomerNgn,
-        rawQuoteRequest: quote.quotePayload,
-        rawQuoteResponse: quote.quoteResponse,
-        rawBillRequest: quote.billPayload,
-        rawBillResponse: quote.billResponse,
-        quoteExpiresAt,
-        status: "QUOTED",
-      } as never,
-      select: {
-        id: true,
-        pickupCount: true,
-        deliveryCount: true,
-        amountToChargeCustomerNgn: true,
-        currency: true,
-        quoteExpiresAt: true,
-        kwikVehicleId: true,
-        kwikVehicleName: true,
-        marketClusterId: true,
-      },
-    });
+    if (
+      !cart.marketClusterId ||
+      !cart.marketCluster
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Cart must be locked to one market cluster before delivery quote",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /**
+     * Defensively ensure every
+     * product belongs to the cart's
+     * selected market.
+     */
+    const invalidClusterItem =
+      cart.items.find(
+        (item) =>
+          item.product
+            .marketClusterId !==
+          cart.marketClusterId
+      );
+
+    if (
+      invalidClusterItem
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Cart contains an item outside the selected market cluster",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const pickups =
+      buildPickups(
+        cart as CartForQuote
+      );
+
+    if (
+      pickups.length === 0
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "No vendor pickup locations are available for this cart",
+        },
+        {
+          status: 409,
+        }
+      );
+    }
+
+    const deliveryAddress = [
+      delivery.address1,
+      delivery.address2,
+      delivery.city,
+      delivery.state,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    /**
+     * This is the actual Kwik quote.
+     *
+     * Customer delivery address and
+     * coordinates come from their
+     * saved Manna delivery profile.
+     *
+     * Pickup addresses and coordinates
+     * come from each vendor's active
+     * pickup location.
+     */
+    const quote =
+      await quoteKwikMarketplaceDelivery(
+        {
+          pickups,
+
+          delivery: {
+            name:
+              customer.name,
+
+            phone:
+              customer.phone,
+
+            email:
+              customer.email ??
+              undefined,
+
+            address:
+              deliveryAddress,
+
+            latitude:
+              deliveryLatitude,
+
+            longitude:
+              deliveryLongitude,
+
+            instruction:
+              delivery.deliveryNote
+                ?.trim() ||
+              undefined,
+          },
+
+          parcelAmountNgn:
+            calculateParcelAmount(
+              cart as CartForQuote
+            ),
+        }
+      );
+
+    /**
+     * Kwik price is frozen for this
+     * Manna checkout for 10 minutes.
+     *
+     * Checkout must reject/requote
+     * after this time rather than
+     * using a stale delivery price.
+     */
+    const quoteExpiresAt =
+      new Date(
+        Date.now() +
+          10 * 60 * 1000
+      );
+
+    const deliveryQuote =
+      await prisma.deliveryQuote.create(
+        {
+          data: {
+            userId:
+              decoded.userId,
+
+            cartId:
+              cart.id,
+
+            marketClusterId:
+              cart.marketClusterId,
+
+            pickupCount:
+              quote.pickupCount,
+
+            deliveryCount:
+              quote.deliveryCount,
+
+            currency: "NGN",
+
+            kwikPerTaskCostNgn:
+              quote.kwikPerTaskCostNgn,
+
+            kwikTotalServiceChargeNgn:
+              quote.kwikTotalServiceChargeNgn,
+
+            kwikPayableAmountNgn:
+              quote.kwikPayableAmountNgn,
+
+            kwikNetPayableAmountNgn:
+              quote.kwikNetPayableAmountNgn,
+
+            kwikDeliveryChargeNgn:
+              quote.kwikDeliveryChargeNgn,
+
+            kwikSurgeCostNgn:
+              quote.kwikSurgeCostNgn,
+
+            kwikSurgeType:
+              quote.kwikSurgeType,
+
+            kwikVehicleId:
+              quote.kwikVehicleId,
+
+            kwikVehicleName:
+              quote.kwikVehicleName,
+
+            /**
+             * This is the delivery
+             * amount charged to the
+             * Manna customer.
+             */
+            amountToChargeCustomerNgn:
+              quote.amountToChargeCustomerNgn,
+
+            /**
+             * Preserve exact Kwik
+             * request/response evidence
+             * for reconciliation and
+             * troubleshooting.
+             */
+            rawQuoteRequest:
+              quote.quotePayload,
+
+            rawQuoteResponse:
+              quote.quoteResponse,
+
+            rawBillRequest:
+              quote.billPayload,
+
+            rawBillResponse:
+              quote.billResponse,
+
+            quoteExpiresAt,
+
+            status:
+              "QUOTED",
+          } as never,
+
+          select: {
+            id: true,
+
+            pickupCount:
+              true,
+
+            deliveryCount:
+              true,
+
+            amountToChargeCustomerNgn:
+              true,
+
+            currency:
+              true,
+
+            quoteExpiresAt:
+              true,
+
+            kwikVehicleId:
+              true,
+
+            kwikVehicleName:
+              true,
+
+            marketClusterId:
+              true,
+          },
+        }
+      );
 
     return NextResponse.json(
       {
-        message: "Delivery quote created",
-        quote: deliveryQuote,
-        marketCluster: cart.marketCluster,
-        pickupVendors: pickups.map((pickup) => ({
-          vendorId: pickup.vendorId,
-          vendorName: pickup.vendorName,
-          address: pickup.address,
-        })),
-      },
-      { status: 201 }
-    );
-  } catch (error: unknown) {
-    console.error("KWIK_DELIVERY_QUOTE_ERROR", error);
+        message:
+          "Delivery quote created",
 
-    const message = error instanceof Error ? error.message : "Something went wrong";
-    return NextResponse.json({ message }, { status: 500 });
+        quote:
+          deliveryQuote,
+
+        marketCluster:
+          cart.marketCluster,
+
+        deliveryProfile: {
+          address1:
+            delivery.address1,
+
+          address2:
+            delivery.address2,
+
+          city:
+            delivery.city,
+
+          state:
+            delivery.state,
+
+          latitude:
+            deliveryLatitude,
+
+          longitude:
+            deliveryLongitude,
+        },
+
+        pickupVendors:
+          pickups.map(
+            (pickup) => ({
+              vendorId:
+                pickup.vendorId,
+
+              vendorName:
+                pickup.vendorName,
+
+              address:
+                pickup.address,
+            })
+          ),
+      },
+      {
+        status: 201,
+      }
+    );
+  } catch (error) {
+    console.error(
+      "KWIK_DELIVERY_QUOTE_ERROR",
+      error
+    );
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Something went wrong";
+
+    return NextResponse.json(
+      {
+        message,
+      },
+      {
+        status: 500,
+      }
+    );
   }
 }

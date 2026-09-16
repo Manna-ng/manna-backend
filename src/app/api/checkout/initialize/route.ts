@@ -1,8 +1,10 @@
-import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
+import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
+
 import { verifyAuthToken } from "@/lib/auth";
 import { createMarketplacePendingOrderFromQuote } from "@/lib/checkout/marketplaceCheckout";
+import { prisma } from "@/lib/prisma";
 
 const BodySchema = z.object({
   deliveryQuoteId: z.string().uuid(),
@@ -14,13 +16,6 @@ const BodySchema = z.object({
       })
     )
     .min(1),
-  deliveryAddress1: z.string().min(3),
-  deliveryAddress2: z.string().optional(),
-  city: z.string().min(2),
-  state: z.string().min(2),
-  deliveryNote: z.string().optional(),
-  deliveryLat: z.number(),
-  deliveryLng: z.number(),
 });
 
 function unauthorized() {
@@ -36,19 +31,62 @@ export async function POST(req: NextRequest) {
     if (!token) return unauthorized();
 
     const decoded = verifyAuthToken(token);
-    if (!decoded?.userId) return unauthorized();
+    if (!decoded?.userId || decoded.role !== "CUSTOMER") return unauthorized();
 
+    const customer = await prisma.user.findFirst({
+      where: { id: decoded.userId, role: "CUSTOMER" },
+      select: {
+        deliveryProfile: {
+          select: {
+            address1: true,
+            address2: true,
+            city: true,
+            state: true,
+            latitude: true,
+            longitude: true,
+            deliveryNote: true,
+          },
+        },
+      },
+    });
+
+    if (!customer?.deliveryProfile) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "DELIVERY_PROFILE_REQUIRED",
+          message: "Add your delivery details in My Manna Account before checkout.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const delivery = customer.deliveryProfile;
+    const deliveryLatitude = delivery.latitude;
+    const deliveryLongitude = delivery.longitude;
+
+    if (deliveryLatitude === null || deliveryLongitude === null) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "DELIVERY_LOCATION_REQUIRED",
+          message:
+            "Use current location in My Manna Account so Manna can calculate delivery before checkout.",
+        },
+        { status: 409 }
+      );
+    }
     const result = await createMarketplacePendingOrderFromQuote({
       userId: decoded.userId,
       deliveryQuoteId: body.deliveryQuoteId,
       items: body.items,
-      deliveryAddress1: body.deliveryAddress1,
-      deliveryAddress2: body.deliveryAddress2,
-      city: body.city,
-      state: body.state,
-      deliveryNote: body.deliveryNote,
-      deliveryLat: body.deliveryLat,
-      deliveryLng: body.deliveryLng,
+      deliveryAddress1: delivery.address1,
+      deliveryAddress2: delivery.address2 ?? undefined,
+      city: delivery.city,
+      state: delivery.state,
+      deliveryNote: delivery.deliveryNote ?? undefined,
+      deliveryLat: deliveryLatitude,
+      deliveryLng: deliveryLongitude,
     });
 
     return NextResponse.json(
@@ -71,14 +109,8 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : "Something went wrong";
-
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Something went wrong";
     return NextResponse.json({ ok: false, message }, { status: 400 });
   }
 }

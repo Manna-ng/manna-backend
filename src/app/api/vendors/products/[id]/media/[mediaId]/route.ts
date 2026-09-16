@@ -6,7 +6,7 @@ import { deleteVendorProductMedia } from "@/lib/media/productMediaService";
 export const runtime = "nodejs";
 
 type AuthUser = {
-  id: string;
+  userId: string;
 };
 
 async function getUser(): Promise<AuthUser | null> {
@@ -28,7 +28,7 @@ export async function DELETE(
 
   try {
     const media = await deleteVendorProductMedia({
-      userId: user.id,
+      userId: user.userId,
       productId,
       mediaId,
     });

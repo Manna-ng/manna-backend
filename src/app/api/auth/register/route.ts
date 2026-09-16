@@ -1,76 +1,282 @@
-// src/app/api/auth/register/route.ts
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { hashPassword, signAuthToken } from "@/lib/auth";
+import {
+  NextResponse,
+} from "next/server";
 
-export async function POST(req: Request) {
+import {
+  prisma,
+} from "@/lib/prisma";
+
+import {
+  hashPassword,
+} from "@/lib/auth";
+
+import {
+  EMAIL_PATTERN,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+  validatePassword,
+} from "@/lib/auth/customer-input";
+
+import {
+  issueOtpChallenge,
+  OtpCooldownError,
+  OtpRateLimitError,
+  releaseOtpCooldownAfterDeliveryFailure,
+} from "@/lib/auth/otp";
+
+import {
+  sendAuthOtpEmail,
+} from "@/lib/auth/otp-email";
+
+export async function POST(
+  req: Request
+) {
   try {
-    const body = await req.json();
-    const { name, phone, email, password } = body;
+    const body =
+      (await req.json()) as Record<
+        string,
+        unknown
+      >;
 
-    if (!name || !phone || !password) {
+    const name =
+      normalizeName(
+        body.name ??
+          body.fullName
+      );
+
+    const email =
+      normalizeEmail(
+        body.email
+      );
+
+    const phone =
+      normalizePhone(
+        body.phone
+      );
+
+    const password =
+      body.password;
+
+    if (!name) {
       return NextResponse.json(
-        { message: "name, phone and password are required" },
-        { status: 400 }
+        {
+          message:
+            "Full name is required",
+        },
+
+        {
+          status: 400,
+        }
       );
     }
 
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { phone },
-          email ? { email } : undefined,
-        ].filter(Boolean) as Array<{ phone?: string } | { email?: string }>,
-      },
-    });
+    if (
+      !email ||
+      !EMAIL_PATTERN.test(
+        email
+      )
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Enter a valid email address",
+        },
+
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (!phone) {
+      return NextResponse.json(
+        {
+          message:
+            "Enter a valid phone number",
+        },
+
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const passwordError =
+      validatePassword(
+        password
+      );
+
+    if (passwordError) {
+      return NextResponse.json(
+        {
+          message:
+            passwordError,
+        },
+
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const existingUser =
+      await prisma.user
+        .findFirst({
+          where: {
+            OR: [
+              {
+                email,
+              },
+
+              {
+                phone,
+              },
+            ],
+          },
+
+          select: {
+            id: true,
+          },
+        });
 
     if (existingUser) {
       return NextResponse.json(
-        { message: "User with this phone/email already exists" },
-        { status: 409 }
+        {
+          message:
+            "An account already exists with this email or phone number",
+        },
+
+        {
+          status: 409,
+        }
       );
     }
 
-    const passwordHash = await hashPassword(password);
+    /*
+     * The customer is NOT created
+     * yet.
+     *
+     * We hash the password and
+     * retain only the pending
+     * signup until email OTP has
+     * been verified.
+     */
+    const passwordHash =
+      await hashPassword(
+        password as string
+      );
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        phone,
-        email,
-        passwordHash,
-      },
-    });
+    const otp =
+      await issueOtpChallenge(
+        {
+          purpose:
+            "SIGNUP",
 
-    const token = signAuthToken(user.id, user.role);
+          email,
 
-    const res = NextResponse.json(
+          pendingSignup: {
+            name,
+            phone,
+            passwordHash,
+          },
+        }
+      );
+
+    try {
+      await sendAuthOtpEmail(
+        {
+          purpose:
+            "SIGNUP",
+
+          email,
+
+          name,
+
+          code:
+            otp.code,
+        }
+      );
+    } catch (error) {
+      await releaseOtpCooldownAfterDeliveryFailure(
+        "SIGNUP",
+        email
+      );
+
+      throw error;
+    }
+
+    return NextResponse.json(
       {
-        user: {
-          id: user.id,
-          name: user.name,
-          phone: user.phone,
-          email: user.email,
-          role: user.role,
-        },
+        verificationRequired:
+          true,
+
+        email,
+
+        expiresInSeconds:
+          otp.expiresInSeconds,
+
+        resendAfterSeconds:
+          otp.resendAfterSeconds,
+
+        message:
+          "We sent a 6-digit verification code to your email.",
       },
-      { status: 201 }
+
+      {
+        status: 202,
+      }
+    );
+  } catch (error) {
+    if (
+      error instanceof
+      OtpCooldownError
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            error.message,
+
+          retryAfterSeconds:
+            error.retryAfterSeconds,
+        },
+
+        {
+          status: 429,
+        }
+      );
+    }
+
+    if (
+      error instanceof
+      OtpRateLimitError
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            error.message,
+        },
+
+        {
+          status: 429,
+        }
+      );
+    }
+
+    console.error(
+      "REGISTER_START_ERROR",
+      error
     );
 
-    res.cookies.set("manna_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 7 * 24 * 60 * 60,
-    });
-
-    return res;
-  } catch (error) {
-    console.error("REGISTER_ERROR", error);
     return NextResponse.json(
-      { message: "Something went wrong" },
-      { status: 500 }
+      {
+        message:
+          "We couldn’t send your verification code right now. Please try again.",
+      },
+
+      {
+        status: 502,
+      }
     );
   }
 }

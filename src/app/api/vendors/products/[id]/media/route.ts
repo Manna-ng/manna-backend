@@ -7,7 +7,7 @@ import { assertVendorCanManageProduct, uploadProductMedia } from "@/lib/media/pr
 export const runtime = "nodejs";
 
 type AuthUser = {
-  id: string;
+  userId: string;
 };
 
 async function getUser(): Promise<AuthUser | null> {
@@ -27,7 +27,7 @@ export async function GET(
   const { id: productId } = await ctx.params;
 
   try {
-    await assertVendorCanManageProduct(user.id, productId);
+    await assertVendorCanManageProduct(user.userId, productId);
 
     const media = await prisma.mediaAsset.findMany({
       where: {
@@ -63,7 +63,7 @@ export async function POST(
 
   try {
     const media = await uploadProductMedia({
-      userId: user.id,
+      userId: user.userId,
       productId,
       file,
       purpose: typeof purpose === "string" ? purpose : undefined,

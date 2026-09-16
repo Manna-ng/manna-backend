@@ -12,14 +12,14 @@ export async function getActiveDiscounts() {
         { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
       ],
     },
-    // latest campaign wins
+    // Latest campaign wins inside each priority class.
     orderBy: { createdAt: "desc" },
   });
 }
 
 /**
  * Checks whether a discount applies to a given productId
- * based on your schema: appliesToAll OR productIds(Json array).
+ * based on the current schema: appliesToAll OR productIds(Json array).
  */
 export function isDiscountEligibleForProduct(
   discount: Discount | null | undefined,
@@ -34,33 +34,33 @@ export function isDiscountEligibleForProduct(
 }
 
 /**
- * Returns the best applicable discount for a product:
- * Priority: product-specific > appliesToAll
- * If multiple, latest campaign wins (because getActiveDiscounts() is sorted desc).
+ * Product-specific discounts win over global discounts.
+ * Within each class, the first item wins, so pass the array returned by
+ * getActiveDiscounts() (already newest-first).
  */
-export async function getActiveDiscountForProduct(productId: string) {
-  const discounts = await getActiveDiscounts();
-
+export function getBestActiveDiscountForProduct(
+  discounts: Discount[],
+  productId: string
+) {
   const productSpecific = discounts.find(
-    (d) => !d.appliesToAll && isDiscountEligibleForProduct(d, productId)
+    (discount) =>
+      !discount.appliesToAll &&
+      isDiscountEligibleForProduct(discount, productId)
   );
+
   if (productSpecific) return productSpecific;
 
-  const global = discounts.find((d) => d.appliesToAll);
-  return global ?? null;
+  return discounts.find((discount) => discount.appliesToAll) ?? null;
 }
 
-/**
- * ✅ Backward-compatible alias (fixes your import error)
- * Some routes may still import getActiveDiscountsForProduct
- */
+export async function getActiveDiscountForProduct(productId: string) {
+  const discounts = await getActiveDiscounts();
+  return getBestActiveDiscountForProduct(discounts, productId);
+}
+
+// Backward-compatible alias used by existing routes.
 export const getActiveDiscountsForProduct = getActiveDiscountForProduct;
 
-/**
- * Applies discount to an amount and returns both:
- * - finalAmount
- * - discountAmount
- */
 export function applyDiscountDetailed(amount: number, discount?: Discount | null) {
   if (!discount) {
     return { finalAmount: amount, discountAmount: 0 };
@@ -80,9 +80,6 @@ export function applyDiscountDetailed(amount: number, discount?: Discount | null
   return { finalAmount, discountAmount: Math.min(off, amount) };
 }
 
-/**
- * Convenience for prices
- */
 export function applyDiscountToPriceNgn(
   priceNgn: number,
   discount?: Discount | null

@@ -1,72 +1,30 @@
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
+import { NextResponse } from "next/server";
+
 import { verifyAuthToken } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import {
-  getActiveDiscounts,
-  isDiscountEligibleForProduct,
   applyDiscountDetailed,
+  getActiveDiscounts,
+  getBestActiveDiscountForProduct,
 } from "@/services/discount.service";
 
 function unauthorized() {
   return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 }
 
-type CartSummaryItem = {
-  id: string;
-  quantity: number;
-  productId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  product: {
-    id: string;
-    name: string;
-    slug: string;
-    imageUrl: string | null;
-    marketClusterId: string | null;
-    vendor: {
-      id: string;
-      displayName: string;
-      slug: string;
-    } | null;
-  };
-  productVariant: {
-    id: string;
-    name: string;
-    unit: string;
-    unitWeightKg: number | null;
-    priceNgn: number;
-    stockQty: number | null;
-  } | null;
-};
-
-type CartSummaryRecord = {
-  id: string;
-  updatedAt: Date;
-  marketCluster: {
-    id: string;
-    name: string;
-    slug: string;
-    city: string;
-    state: string;
-  } | null;
-  items: CartSummaryItem[];
-};
-
 export async function GET() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get("manna_token")?.value;
-
     if (!token) return unauthorized();
 
     const decoded = verifyAuthToken(token);
-    if (!decoded?.userId) return unauthorized();
+    if (!decoded?.userId || decoded.role !== "CUSTOMER") return unauthorized();
 
-    const cart = (await prisma.cart.upsert({
+    // GET must not create or mutate a cart. An account with no cart simply has an empty cart.
+    const cart = await prisma.cart.findUnique({
       where: { userId: decoded.userId },
-      create: { userId: decoded.userId },
-      update: {},
       select: {
         id: true,
         updatedAt: true,
@@ -81,7 +39,7 @@ export async function GET() {
         },
         items: {
           orderBy: { updatedAt: "desc" },
-          take: 50,
+          take: 100,
           select: {
             id: true,
             quantity: true,
@@ -117,60 +75,55 @@ export async function GET() {
           },
         },
       },
-    })) as CartSummaryRecord;
+    });
+
+    if (!cart) {
+      return NextResponse.json({
+        cart: null,
+        summary: {
+          totalItems: 0,
+          currency: "NGN",
+          subtotalBeforeDiscountNgn: 0,
+          discountTotalNgn: 0,
+          subtotalAfterDiscountNgn: 0,
+        },
+        items: [],
+      });
+    }
 
     const discounts = await getActiveDiscounts();
-
-    const pickDiscountForProduct = (productId: string) => {
-      const productSpecific = discounts.find(
-        (discount) =>
-          !discount.appliesToAll &&
-          isDiscountEligibleForProduct(discount, productId)
-      );
-      if (productSpecific) return productSpecific;
-
-      const global = discounts.find((discount) => discount.appliesToAll);
-      return global ?? null;
-    };
 
     let totalItems = 0;
     let subtotalBeforeDiscountNgn = 0;
     let discountTotalNgn = 0;
     let subtotalAfterDiscountNgn = 0;
 
-    const items = cart.items.map((item: CartSummaryItem) => {
+    const items = cart.items.map((item) => {
       const originalUnitPriceNgn = item.productVariant?.priceNgn ?? 0;
-      const appliedDiscount = pickDiscountForProduct(item.productId);
+      const appliedDiscount = getBestActiveDiscountForProduct(discounts, item.productId);
+      const { finalAmount: discountedUnitPriceNgn, discountAmount: discountAmountPerUnitNgn } =
+        applyDiscountDetailed(originalUnitPriceNgn, appliedDiscount);
 
-      const {
-        finalAmount: discountedUnitPriceNgn,
-        discountAmount: discountAmountPerUnitNgn,
-      } = applyDiscountDetailed(originalUnitPriceNgn, appliedDiscount);
-
-      const lineBefore = originalUnitPriceNgn * item.quantity;
-      const lineAfter = discountedUnitPriceNgn * item.quantity;
-      const lineDiscount = discountAmountPerUnitNgn * item.quantity;
+      const lineTotalBeforeDiscountNgn = originalUnitPriceNgn * item.quantity;
+      const lineDiscountNgn = discountAmountPerUnitNgn * item.quantity;
+      const lineTotalAfterDiscountNgn = discountedUnitPriceNgn * item.quantity;
 
       totalItems += item.quantity;
-      subtotalBeforeDiscountNgn += lineBefore;
-      discountTotalNgn += lineDiscount;
-      subtotalAfterDiscountNgn += lineAfter;
+      subtotalBeforeDiscountNgn += lineTotalBeforeDiscountNgn;
+      discountTotalNgn += lineDiscountNgn;
+      subtotalAfterDiscountNgn += lineTotalAfterDiscountNgn;
 
       return {
         id: item.id,
         quantity: item.quantity,
-
         originalUnitPriceNgn,
         discountedUnitPriceNgn,
         discountAmountPerUnitNgn,
-
-        lineTotalBeforeDiscountNgn: lineBefore,
-        lineDiscountNgn: lineDiscount,
-        lineTotalAfterDiscountNgn: lineAfter,
-
+        lineTotalBeforeDiscountNgn,
+        lineDiscountNgn,
+        lineTotalAfterDiscountNgn,
         product: item.product,
         variant: item.productVariant,
-
         appliedDiscount: appliedDiscount
           ? {
               id: appliedDiscount.id,
@@ -184,35 +137,28 @@ export async function GET() {
               endsAt: appliedDiscount.endsAt,
             }
           : null,
-
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };
     });
 
-    return NextResponse.json(
-      {
-        cart: {
-          id: cart.id,
-          updatedAt: cart.updatedAt,
-          marketCluster: cart.marketCluster,
-        },
-        summary: {
-          totalItems,
-          currency: "NGN",
-          subtotalBeforeDiscountNgn,
-          discountTotalNgn,
-          subtotalAfterDiscountNgn,
-        },
-        items,
+    return NextResponse.json({
+      cart: {
+        id: cart.id,
+        updatedAt: cart.updatedAt,
+        marketCluster: cart.marketCluster,
       },
-      { status: 200 }
-    );
-  } catch (error: unknown) {
+      summary: {
+        totalItems,
+        currency: "NGN",
+        subtotalBeforeDiscountNgn,
+        discountTotalNgn,
+        subtotalAfterDiscountNgn,
+      },
+      items,
+    });
+  } catch (error) {
     console.error("CART_SUMMARY_ERROR", error);
-    return NextResponse.json(
-      { message: "Something went wrong" },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: "Unable to load your cart" }, { status: 500 });
   }
 }

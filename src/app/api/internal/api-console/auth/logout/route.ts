@@ -1,30 +1,33 @@
 import { NextResponse } from "next/server";
 
 export async function POST() {
-  const response = NextResponse.json({
-    ok: true,
-    message: "Admin session ended.",
-  });
+  const response =
+    NextResponse.json({
+      success: true,
+    });
 
-  response.headers.set("Cache-Control", "no-store");
+  /**
+   * ONLY customer cookie is removed.
+   *
+   * Never touch manna_admin_token here.
+   */
+  response.cookies.set(
+    "manna_token",
+    "",
+    {
+      httpOnly: true,
 
-  response.cookies.set("manna_admin_token", "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 0,
-    expires: new Date(0),
-  });
+      secure:
+        process.env.NODE_ENV ===
+        "production",
 
- response.cookies.set("manna_admin_csrf", "", {
-  httpOnly: false,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "strict",
-  path: "/",
-  maxAge: 0,
-  expires: new Date(0),
-});
+      sameSite: "lax",
+
+      path: "/",
+
+      maxAge: 0,
+    }
+  );
 
   return response;
 }

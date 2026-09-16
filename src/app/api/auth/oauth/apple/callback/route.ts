@@ -1,7 +1,22 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { getAppleOAuthConfig } from "@/lib/oauth/config";
-import { parseApplePostedName, verifyAppleOAuthCallback } from "@/lib/oauth/apple";
-import { signInOAuthCustomer } from "@/lib/oauth/customer";
+import {
+  NextResponse,
+  type NextRequest,
+} from "next/server";
+
+import {
+  getAppBaseUrl,
+  getAppleOAuthConfig,
+} from "@/lib/oauth/config";
+
+import {
+  parseApplePostedName,
+  verifyAppleOAuthCallback,
+} from "@/lib/oauth/apple";
+
+import {
+  signInOAuthCustomer,
+} from "@/lib/oauth/customer";
+
 import {
   clearOAuthStateCookie,
   readOAuthStateCookie,
@@ -10,69 +25,219 @@ import {
 
 export const runtime = "nodejs";
 
-function redirectWithError(req: NextRequest, message: string) {
-  const url = new URL("/login", req.url);
-  url.searchParams.set("oauth_error", message);
-  return NextResponse.redirect(url);
+function appUrl(
+  req: NextRequest,
+  path: string
+) {
+  return new URL(
+    path,
+    `${getAppBaseUrl(req)}/`
+  );
 }
 
-async function readAppleCallbackForm(req: NextRequest) {
-  const form = await req.formData();
+function redirectWithError(
+  req: NextRequest,
+  message: string
+) {
+  const url =
+    appUrl(
+      req,
+      "/login"
+    );
+
+  url.searchParams.set(
+    "oauth_error",
+    message
+  );
+
+  return NextResponse.redirect(
+    url
+  );
+}
+
+async function readAppleCallbackForm(
+  req: NextRequest
+) {
+  const form =
+    await req.formData();
 
   return {
-    code: typeof form.get("code") === "string" ? String(form.get("code")) : null,
-    state: typeof form.get("state") === "string" ? String(form.get("state")) : null,
-    error: typeof form.get("error") === "string" ? String(form.get("error")) : null,
-    user: typeof form.get("user") === "string" ? String(form.get("user")) : null,
+    code:
+      typeof form.get(
+        "code"
+      ) === "string"
+        ? String(
+            form.get("code")
+          )
+        : null,
+
+    state:
+      typeof form.get(
+        "state"
+      ) === "string"
+        ? String(
+            form.get("state")
+          )
+        : null,
+
+    error:
+      typeof form.get(
+        "error"
+      ) === "string"
+        ? String(
+            form.get("error")
+          )
+        : null,
+
+    user:
+      typeof form.get(
+        "user"
+      ) === "string"
+        ? String(
+            form.get("user")
+          )
+        : null,
   };
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  req: NextRequest
+) {
   try {
-    const form = await readAppleCallbackForm(req);
+    const form =
+      await readAppleCallbackForm(
+        req
+      );
 
     if (form.error) {
-      const response = redirectWithError(req, "apple_denied");
-      clearOAuthStateCookie(response, "apple");
+      const response =
+        redirectWithError(
+          req,
+          "apple_denied"
+        );
+
+      clearOAuthStateCookie(
+        response,
+        "apple"
+      );
+
       return response;
     }
 
-    const sealedState = readOAuthStateCookie(req, "apple");
-    const state = sealedState ? unsealOAuthState(sealedState, "apple") : null;
+    const sealedState =
+      readOAuthStateCookie(
+        req,
+        "apple"
+      );
 
-    if (!form.code || !form.state || !state || state.state !== form.state) {
-      const response = redirectWithError(req, "invalid_apple_state");
-      clearOAuthStateCookie(response, "apple");
+    const state =
+      sealedState
+        ? unsealOAuthState(
+            sealedState,
+            "apple"
+          )
+        : null;
+
+    if (
+      !form.code ||
+      !form.state ||
+      !state ||
+      state.state !==
+        form.state
+    ) {
+      const response =
+        redirectWithError(
+          req,
+          "invalid_apple_state"
+        );
+
+      clearOAuthStateCookie(
+        response,
+        "apple"
+      );
+
       return response;
     }
 
-    const profile = await verifyAppleOAuthCallback({
-      config: getAppleOAuthConfig(req),
-      code: form.code,
-      codeVerifier: state.codeVerifier,
-      nonce: state.nonce,
-      postedName: parseApplePostedName(form.user),
-    });
+    const profile =
+      await verifyAppleOAuthCallback(
+        {
+          config:
+            getAppleOAuthConfig(
+              req
+            ),
 
-    const result = await signInOAuthCustomer(profile);
-    const response = NextResponse.redirect(new URL(state.nextPath, req.url));
+          code:
+            form.code,
 
-    response.cookies.set("manna_token", result.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 7 * 24 * 60 * 60,
-    });
+          codeVerifier:
+            state.codeVerifier,
 
-    clearOAuthStateCookie(response, "apple");
+          nonce:
+            state.nonce,
+
+          postedName:
+            parseApplePostedName(
+              form.user
+            ),
+        }
+      );
+
+    const result =
+      await signInOAuthCustomer(
+        profile
+      );
+
+    const response =
+      NextResponse.redirect(
+        appUrl(
+          req,
+          state.nextPath
+        )
+      );
+
+    response.cookies.set(
+      "manna_token",
+      result.token,
+      {
+        httpOnly: true,
+
+        secure:
+          process.env.NODE_ENV ===
+          "production",
+
+        sameSite: "lax",
+
+        path: "/",
+
+        maxAge:
+          7 * 24 * 60 * 60,
+      }
+    );
+
+    clearOAuthStateCookie(
+      response,
+      "apple"
+    );
 
     return response;
   } catch (error: unknown) {
-    console.error("APPLE_OAUTH_CALLBACK_ERROR", error);
+    console.error(
+      "APPLE_OAUTH_CALLBACK_ERROR",
+      error
+    );
 
-    const response = redirectWithError(req, "apple_failed");
-    clearOAuthStateCookie(response, "apple");
+    const response =
+      redirectWithError(
+        req,
+        "apple_failed"
+      );
+
+    clearOAuthStateCookie(
+      response,
+      "apple"
+    );
+
     return response;
   }
 }
