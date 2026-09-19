@@ -16,13 +16,23 @@ export async function GET() {
         canAccessVendorDashboard: false,
         canListProducts: false,
         canSubmitForReview: false,
-        missingSteps: ["INITIAL_APPLICATION"],
+        requiredStepsComplete: false,
+        nextRequiredStep: "BUSINESS_PROFILE",
+        locationReady: false,
+        deliveryReady: false,
+        visibilityReady: false,
+        steps: {
+          businessProfile: false,
+          bankAccount: false,
+          pickupLocation: false,
+          vendorAgreement: false,
+          submittedForReview: false,
+          adminApproved: false,
+        },
+        missingSteps: ["BUSINESS_PROFILE", "BANK_ACCOUNT", "VENDOR_AGREEMENT"],
       },
     });
   }
 
-  return NextResponse.json({
-    vendor,
-    onboarding: computeVendorOnboardingSummary(vendor),
-  });
+  return NextResponse.json({ vendor, onboarding: computeVendorOnboardingSummary(vendor) });
 }

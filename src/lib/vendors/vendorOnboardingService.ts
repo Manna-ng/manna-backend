@@ -36,8 +36,10 @@ import type { VendorStatus } from "@prisma/client";
   export type VendorPickupInput = {
     label?: string;
     address: string;
-    latitude: number;
-    longitude: number;
+    latitude?: number | null;
+    longitude?: number | null;
+    accuracy?: number | null;
+    capturedAt?: Date | null;
     contactName?: string;
     phone?: string;
   };
@@ -82,7 +84,16 @@ import type { VendorStatus } from "@prisma/client";
       metadata: unknown;
     } | null;
     bankAccounts?: Array<{ id: string; verificationStatus: string; isDefault: boolean }>;
-    pickupLocations?: Array<{ id: string; verificationStatus: string; isDefault: boolean; isActive: boolean }>;
+    pickupLocations?: Array<{
+      id: string;
+      verificationStatus: string;
+      isDefault: boolean;
+      isActive: boolean;
+      latitude?: number | null;
+      longitude?: number | null;
+      accuracy?: number | null;
+      capturedAt?: Date | null;
+    }>;
     agreements?: Array<{ id: string; status: string; acceptedAt: Date | null }>;
   };
 
@@ -201,18 +212,30 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
     const body = optionalJsonObject(payload);
     if (!body) throw new Error("Invalid request body");
 
-    const latitude = Number(body.latitude);
-    const longitude = Number(body.longitude);
+    const latitude = body.latitude === null || body.latitude === undefined || body.latitude === "" ? null : Number(body.latitude);
+    const longitude = body.longitude === null || body.longitude === undefined || body.longitude === "" ? null : Number(body.longitude);
+    const accuracy = body.accuracy === null || body.accuracy === undefined || body.accuracy === "" ? null : Number(body.accuracy);
 
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      throw new Error("Valid pickup latitude and longitude are required");
+    if ((latitude === null) !== (longitude === null)) throw new Error("Pickup latitude and longitude must be supplied together");
+    if (latitude !== null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) throw new Error("Valid pickup latitude is required");
+    if (longitude !== null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180)) throw new Error("Valid pickup longitude is required");
+    if (accuracy !== null && (!Number.isFinite(accuracy) || accuracy < 0)) throw new Error("Valid location accuracy is required");
+
+    let capturedAt: Date | null = null;
+    if (body.capturedAt !== null && body.capturedAt !== undefined && body.capturedAt !== "") {
+      const parsed = new Date(String(body.capturedAt));
+      if (Number.isNaN(parsed.getTime())) throw new Error("Valid location captured time is required");
+      capturedAt = parsed;
     }
+    if (latitude !== null && longitude !== null && !capturedAt) capturedAt = new Date();
 
     return {
       label: optionalString(body.label) ?? "Main pickup location",
       address: requireString(body.address, "Pickup address"),
       latitude,
       longitude,
+      accuracy,
+      capturedAt,
       contactName: optionalString(body.contactName),
       phone: optionalString(body.phone),
     };
@@ -229,48 +252,61 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
     };
   }
 
+  function hasBusinessProfile(vendor: VendorWithRelations): boolean {
+    return Boolean(vendor.displayName && vendor.marketClusterId && (vendor.legalName || vendor.businessRegistrationNumber) && (vendor.email || vendor.phone));
+  }
+
+  function hasBankAccount(vendor: VendorWithRelations): boolean {
+    return Boolean(vendor.bankAccounts?.length);
+  }
+
+  function hasAcceptedAgreement(vendor: VendorWithRelations): boolean {
+    return Boolean(vendor.agreements?.some((item) => item.status === "ACCEPTED" && item.acceptedAt));
+  }
+
+  function hasPrecisePickupLocation(vendor: VendorWithRelations): boolean {
+    return Boolean(vendor.pickupLocations?.some((item) => item.isActive && typeof item.latitude === "number" && Number.isFinite(item.latitude) && typeof item.longitude === "number" && Number.isFinite(item.longitude) && item.capturedAt));
+  }
+
+  function assertBusinessComplete(vendor: VendorWithRelations) {
+    if (!hasBusinessProfile(vendor)) throw new Error("Complete the business step before continuing");
+  }
+
+  function assertBankComplete(vendor: VendorWithRelations) {
+    assertBusinessComplete(vendor);
+    if (!hasBankAccount(vendor)) throw new Error("Complete the bank step before continuing");
+  }
+
   export function computeVendorOnboardingSummary(vendor: VendorWithRelations) {
     const verification = vendor.verification;
-    const hasBusinessProfile = Boolean(
-      vendor.displayName &&
-        vendor.marketClusterId &&
-        (vendor.legalName || vendor.businessRegistrationNumber) &&
-        (vendor.email || vendor.phone)
-    );
-    const hasBankAccount = Boolean(vendor.bankAccounts?.length);
-    const hasPickupLocation = Boolean(vendor.pickupLocations?.some((item) => item.isActive));
-    const hasAcceptedAgreement = Boolean(
-      vendor.agreements?.some((item) => item.status === "ACCEPTED" && item.acceptedAt)
-    );
-    const verificationSubmitted = verification?.status === "SUBMITTED" || verification?.status === "APPROVED";
+    const rawBusiness = hasBusinessProfile(vendor);
+    const rawBank = hasBankAccount(vendor);
+    const rawAgreement = hasAcceptedAgreement(vendor);
+    const businessProfile = rawBusiness;
+    const bankAccount = businessProfile && rawBank;
+    const vendorAgreement = bankAccount && rawAgreement;
+    const verificationSubmitted = vendorAgreement && (verification?.status === "SUBMITTED" || verification?.status === "APPROVED");
+    const adminApproved = verificationSubmitted && vendor.status === "APPROVED";
+    const locationReady = hasPrecisePickupLocation(vendor);
 
     const missingSteps: string[] = [];
-    if (!hasBusinessProfile) missingSteps.push("BUSINESS_PROFILE");
-    if (!hasBankAccount) missingSteps.push("BANK_ACCOUNT");
-    if (!hasPickupLocation) missingSteps.push("PICKUP_LOCATION");
-    if (!hasAcceptedAgreement) missingSteps.push("VENDOR_AGREEMENT");
+    if (!businessProfile) missingSteps.push("BUSINESS_PROFILE");
+    if (!bankAccount) missingSteps.push("BANK_ACCOUNT");
+    if (!vendorAgreement) missingSteps.push("VENDOR_AGREEMENT");
+
+    const nextRequiredStep = !businessProfile ? "BUSINESS_PROFILE" : !bankAccount ? "BANK_ACCOUNT" : !vendorAgreement ? "VENDOR_AGREEMENT" : !verificationSubmitted ? "MANNA_REVIEW" : adminApproved ? "COMPLETE" : "MANNA_REVIEW";
 
     return {
-      vendorId: vendor.id,
-      status: vendor.status,
-      isActive: vendor.isActive,
-      isVisible: vendor.isVisible,
+      vendorId: vendor.id, status: vendor.status, isActive: vendor.isActive, isVisible: vendor.isVisible,
       canAccessVendorDashboard: vendor.status === "APPROVED" && vendor.isActive,
       canListProducts: vendor.status === "APPROVED" && vendor.isActive,
-      canSubmitForReview: missingSteps.length === 0,
-      verificationStatus: verification?.status ?? "PENDING",
-      steps: {
-        businessProfile: hasBusinessProfile,
-        bankAccount: hasBankAccount,
-        pickupLocation: hasPickupLocation,
-        vendorAgreement: hasAcceptedAgreement,
-        submittedForReview: verificationSubmitted,
-        adminApproved: vendor.status === "APPROVED",
-      },
-      missingSteps,
-      reviewedAt: verification?.reviewedAt ?? null,
-      reviewedByAdminId: verification?.reviewedByAdminId ?? null,
-      rejectionReason: verification?.rejectionReason ?? null,
+      canSubmitForReview: vendorAgreement && !verificationSubmitted,
+      requiredStepsComplete: vendorAgreement,
+      verificationStatus: verification?.status ?? "PENDING", nextRequiredStep, locationReady,
+      deliveryReady: vendor.status === "APPROVED" && vendor.isActive && locationReady,
+      visibilityReady: vendor.status === "APPROVED" && vendor.isActive && locationReady,
+      steps: { businessProfile, bankAccount, pickupLocation: locationReady, vendorAgreement, submittedForReview: verificationSubmitted, adminApproved },
+      missingSteps, reviewedAt: verification?.reviewedAt ?? null, reviewedByAdminId: verification?.reviewedByAdminId ?? null, rejectionReason: verification?.rejectionReason ?? null,
     };
   }
 
@@ -430,6 +466,7 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
   export async function upsertVendorBankAccount(userId: string, input: VendorBankInput) {
     const vendor = await getVendorForUser(userId);
     if (!vendor) throw new Error("Vendor application has not been started");
+    assertBusinessComplete(vendor as VendorWithRelations);
 
     const existing = await prisma.vendorBankAccount.findFirst({
       where: { vendorId: vendor.id, isDefault: true },
@@ -473,49 +510,27 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
     const vendor = await getVendorForUser(userId);
     if (!vendor) throw new Error("Vendor application has not been started");
 
-    const existing = await prisma.vendorPickupLocation.findFirst({
-      where: { vendorId: vendor.id, isDefault: true },
-    });
+    const existing = await prisma.vendorPickupLocation.findFirst({ where: { vendorId: vendor.id, isDefault: true } });
+    const data = {
+      label: input.label ?? "Main pickup location", address: input.address, latitude: input.latitude ?? null, longitude: input.longitude ?? null,
+      accuracy: input.accuracy ?? null, capturedAt: input.capturedAt ?? null, contactName: input.contactName, phone: input.phone,
+      marketClusterId: vendor.marketClusterId, verificationStatus: "SUBMITTED" as const, isActive: true,
+    };
+    if (existing) await prisma.vendorPickupLocation.update({ where: { id: existing.id }, data });
+    else await prisma.vendorPickupLocation.create({ data: { vendorId: vendor.id, ...data, isDefault: true } });
 
-    if (existing) {
-      await prisma.vendorPickupLocation.update({
-        where: { id: existing.id },
-        data: {
-          label: input.label ?? "Main pickup location",
-          address: input.address,
-          latitude: input.latitude,
-          longitude: input.longitude,
-          contactName: input.contactName,
-          phone: input.phone,
-          marketClusterId: vendor.marketClusterId,
-          verificationStatus: "SUBMITTED",
-          isActive: true,
-        },
-      });
-    } else {
-      await prisma.vendorPickupLocation.create({
-        data: {
-          vendorId: vendor.id,
-          marketClusterId: vendor.marketClusterId,
-          label: input.label ?? "Main pickup location",
-          address: input.address,
-          latitude: input.latitude,
-          longitude: input.longitude,
-          contactName: input.contactName,
-          phone: input.phone,
-          isDefault: true,
-          isActive: true,
-          verificationStatus: "SUBMITTED",
-        },
-      });
+    const refreshed = await getVendorForUser(userId);
+    if (refreshed && refreshed.status === "APPROVED" && refreshed.isActive) {
+      const locationReady = hasPrecisePickupLocation(refreshed as VendorWithRelations);
+      if (refreshed.isVisible !== locationReady) await prisma.vendor.update({ where: { id: refreshed.id }, data: { isVisible: locationReady } });
     }
-
     return getVendorForUser(userId);
   }
 
   export async function acceptVendorAgreement(userId: string, input: VendorAgreementInput) {
     const vendor = await getVendorForUser(userId);
     if (!vendor) throw new Error("Vendor application has not been started");
+    assertBankComplete(vendor as VendorWithRelations);
 
     const title = input.title ?? "Manna Vendor Agreement";
     const version = input.version ?? "v1";
@@ -645,8 +660,11 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
     if (!vendor) throw new Error("Vendor application not found");
 
     const summary = computeVendorOnboardingSummary(vendor as VendorWithRelations);
-    if (!summary.canSubmitForReview && vendor.status !== "UNDER_REVIEW") {
+    if (!summary.requiredStepsComplete) {
       throw new Error(`Vendor onboarding is incomplete: ${summary.missingSteps.join(", ")}`);
+    }
+    if (!summary.steps.submittedForReview) {
+      throw new Error("Vendor application must be submitted for Manna review before approval");
     }
 
     const now = new Date();
@@ -657,7 +675,7 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
         data: {
           status: "APPROVED",
           isActive: true,
-          isVisible: true,
+          isVisible: hasPrecisePickupLocation(vendor as VendorWithRelations),
           approvedAt: now,
           rejectedAt: null,
           suspendedAt: null,

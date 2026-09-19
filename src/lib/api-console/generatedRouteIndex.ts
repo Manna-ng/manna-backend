@@ -536,6 +536,11 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/vendors/onboarding/business/route.ts"
   },
   {
+    "method": "GET",
+    "path": "/api/vendors/onboarding/market-clusters",
+    "sourceFile": "src/app/api/vendors/onboarding/market-clusters/route.ts"
+  },
+  {
     "method": "PUT",
     "path": "/api/vendors/onboarding/pickup-location",
     "sourceFile": "src/app/api/vendors/onboarding/pickup-location/route.ts"

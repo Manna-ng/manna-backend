@@ -202,7 +202,7 @@ model User {
 
   deliveryProfile CustomerDeliveryProfile?
 
-  // âœ… persistent cart (1 cart per user)
+  // Ã¢Å“â€¦ persistent cart (1 cart per user)
   cart Cart?
 
   createdAt DateTime @default(now())
@@ -259,7 +259,7 @@ model Product {
   variants   ProductVariant[]
   orderItems OrderItem[]
 
-  // âœ… cart items
+  // Ã¢Å“â€¦ cart items
   cartItems CartItem[]
 
   createdAt DateTime @default(now())
@@ -292,7 +292,7 @@ model ProductVariant {
 
   orderItems OrderItem[]
 
-  // âœ… cart items
+  // Ã¢Å“â€¦ cart items
   cartItems CartItem[]
 
   createdAt DateTime @default(now())
@@ -352,7 +352,7 @@ model Order {
   mannaCommissionAmountNgn Int       @default(0)
   vendorPayableAmountNgn   Int       @default(0)
 
-  // âœ… NEW: weight snapshot for ops/audit (optional but very useful)
+  // Ã¢Å“â€¦ NEW: weight snapshot for ops/audit (optional but very useful)
   totalWeightKg Float?
 
   items    OrderItem[]
@@ -378,7 +378,7 @@ model Delivery {
   partner DeliveryPartner @default(KWIK)
   status  DeliveryStatus  @default(CREATED)
 
-  // âœ… ADD THESE HERE
+  // Ã¢Å“â€¦ ADD THESE HERE
   processingStatus       DeliveryProcessingStatus @default(PENDING)
   requiresManualDispatch Boolean                  @default(false)
   scheduledDispatchAt    DateTime?
@@ -400,7 +400,7 @@ model Delivery {
   deliveredAt            DateTime?
   kwikLastTerminalStatus Int?
 
-  // âœ… NEW: chosen vehicle for this delivery
+  // Ã¢Å“â€¦ NEW: chosen vehicle for this delivery
   kwikVehicleId    Int?
   kwikVehicleLabel String? // BIKE | SUV | VAN
   totalWeightKg    Float? // snapshot at dispatch time
@@ -830,7 +830,7 @@ model SiteSettings {
 }
 
 //
-// âœ… Persistent Cart
+// Ã¢Å“â€¦ Persistent Cart
 // - 1 cart per user (userId is unique on Cart)
 // - Prevent duplicates via unique constraint (cartId + productId + productVariantId)
 //
@@ -869,7 +869,7 @@ model CartItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // âœ… prevents duplicates for same product+variant in same cart
+  // Ã¢Å“â€¦ prevents duplicates for same product+variant in same cart
   // Note: Postgres allows multiple NULLs in unique constraints,
   // so variant=null rows may still duplicate. We'll handle that in API with upsert logic.
   @@unique([cartId, productId, productVariantId])
@@ -1075,8 +1075,10 @@ model VendorPickupLocation {
 
   label       String
   address     String
-  latitude    Float
-  longitude   Float
+  latitude    Float?
+  longitude   Float?
+  accuracy Float?
+  capturedAt DateTime?
   contactName String?
   phone       String?
 

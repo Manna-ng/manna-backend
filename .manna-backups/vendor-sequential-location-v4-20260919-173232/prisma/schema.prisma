@@ -1,0 +1,1415 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Optional but recommended for Neon:
+  directUrl = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+  VENDOR
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PROCESSING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentProvider {
+  PAYSTACK
+  FLUTTERWAVE
+}
+
+enum DeliveryPartner {
+  KWIK
+}
+
+enum DeliveryStatus {
+  CREATED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum DeliveryProcessingStatus {
+  PENDING
+  QUEUED
+  READY_FOR_DISPATCH
+  DISPATCHED
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
+
+enum VariantUnit {
+  PIECE
+  KG
+  PAINT
+  HALF_PAINT
+  BASKET
+}
+
+enum VendorStatus {
+  DRAFT
+  PENDING_VERIFICATION
+  UNDER_REVIEW
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+enum VendorUserRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+enum VendorVerificationStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum VendorAgreementStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum VendorProductApprovalStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum ApiConsoleExecutionOutcome {
+  SUCCEEDED
+  FAILED
+}
+
+enum DeliveryQuoteStatus {
+  DRAFT
+  QUOTED
+  FAILED
+  EXPIRED
+  USED
+  CANCELLED
+}
+
+enum KwikDeliveryTaskStatus {
+  PENDING
+  CREATED
+  FAILED
+  CANCELLED
+}
+
+enum MediaStorageProvider {
+  FIREBASE_STORAGE
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  FILE
+}
+
+enum MediaOwnerType {
+  PRODUCT
+  ORDER
+  VENDOR_ORDER
+  CUSTOMER_FEEDBACK
+  USER
+  SYSTEM
+}
+
+enum MediaApprovalStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  DELETED
+}
+
+enum AuthOtpPurpose {
+  SIGNUP
+  PASSWORD_RESET
+}
+
+enum ReviewStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+model User {
+  id                    String    @id @default(uuid())
+  name                  String
+  email                 String?   @unique
+  phone                 String?   @unique
+  passwordHash          String?
+  role                  UserRole  @default(CUSTOMER)
+  // Separate protection for internal admin/console sign-in.
+  adminFailedLoginCount Int       @default(0)
+  adminLockedUntil      DateTime?
+
+  // Audit trail for Backend Console activity.
+  apiConsoleExecutionLogs       ApiConsoleExecutionLog[]
+  apiConsoleExecutionRateLimits ApiConsoleExecutionRateLimit[]
+
+  oauthAccounts CustomerOAuthAccount[]
+
+  vendorUsers VendorUser[]
+
+  faceImageUrl   String?
+  isFaceCaptured Boolean @default(false)
+  isFaceVerified Boolean @default(false)
+
+  orders Order[]
+
+  productReviews ProductReview[]
+  vendorReviews  VendorReview[]
+
+  deliveryProfile CustomerDeliveryProfile?
+
+  // âœ… persistent cart (1 cart per user)
+  cart Cart?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([phone])
+  @@index([email])
+}
+
+model CustomerDeliveryProfile {
+  id String @id @default(uuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  address1 String
+  address2 String?
+  city     String
+  state    String
+
+  latitude  Float?
+  longitude Float?
+
+  deliveryNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Product {
+  id          String  @id @default(uuid())
+  name        String
+  slug        String  @unique
+  description String?
+
+  category    String
+  subCategory String?
+
+  imageUrl   String?
+  isActive   Boolean @default(true)
+  isFeatured Boolean @default(false)
+
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+  vendorId String?
+
+  marketCluster   MarketCluster? @relation(fields: [marketClusterId], references: [id])
+  marketClusterId String?
+
+  approvalStatus VendorProductApprovalStatus @default(APPROVED)
+  rejectedReason String?
+
+  variants   ProductVariant[]
+  orderItems OrderItem[]
+
+  // âœ… cart items
+  cartItems CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ratingAverage Float @default(0)
+  ratingCount   Int   @default(0)
+
+  reviews ProductReview[]
+
+  @@index([category])
+  @@index([subCategory])
+  @@index([isFeatured])
+  @@index([vendorId])
+  @@index([marketClusterId])
+  @@index([approvalStatus])
+}
+
+model ProductVariant {
+  id        String  @id @default(uuid())
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String
+
+  name         String
+  unit         VariantUnit @default(PIECE)
+  unitWeightKg Float?
+
+  priceNgn Int
+  stockQty Int?
+
+  orderItems OrderItem[]
+
+  // âœ… cart items
+  cartItems CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([unit])
+}
+
+model Order {
+  id          String  @id @default(uuid())
+  orderNumber String  @unique
+  user        User?   @relation(fields: [userId], references: [id])
+  userId      String?
+
+  status        OrderStatus   @default(PENDING_PAYMENT)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  totalAmountNgn Int
+  deliveryFeeNgn Int
+
+  paymentProvider  PaymentProvider?
+  paymentReference String?
+  paidAt           DateTime?
+
+  deliveryAddress1 String
+  deliveryAddress2 String?
+  city             String
+  state            String
+  deliveryNote     String?
+  deliveryEstimate DateTime?
+
+  deliveryLat Float?
+  deliveryLng Float?
+
+  deliveryPartner DeliveryPartner @default(KWIK)
+
+  deliveryQuoteId        String?   @unique
+  deliveryQuoteSnapshot  Json?
+  deliveryQuoteExpiresAt DateTime?
+  deliveryPickupCount    Int?
+
+  marketCluster   MarketCluster? @relation(fields: [marketClusterId], references: [id])
+  marketClusterId String?
+
+  faceCaptureImageUrl String?
+  faceCaptureAt       DateTime?
+
+  invoiceNumber   String?   @unique
+  invoiceIssuedAt DateTime?
+  receiptSentAt   DateTime?
+  receiptEmailTo  String?
+
+  settlementStatus         String    @default("NOT_SETTLED")
+  settlementCalculatedAt   DateTime?
+  vendorGrossAmountNgn     Int       @default(0)
+  mannaCommissionAmountNgn Int       @default(0)
+  vendorPayableAmountNgn   Int       @default(0)
+
+  // âœ… NEW: weight snapshot for ops/audit (optional but very useful)
+  totalWeightKg Float?
+
+  items    OrderItem[]
+  delivery Delivery?
+  payments PaymentAttempt[]
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  productReviews ProductReview[]
+  vendorReviews  VendorReview[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([marketClusterId])
+}
+
+model Delivery {
+  id      String @id @default(uuid())
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String @unique
+
+  partner DeliveryPartner @default(KWIK)
+  status  DeliveryStatus  @default(CREATED)
+
+  // âœ… ADD THESE HERE
+  processingStatus       DeliveryProcessingStatus @default(PENDING)
+  requiresManualDispatch Boolean                  @default(false)
+  scheduledDispatchAt    DateTime?
+  dispatchDeferredReason String?
+
+  kwikTaskId      String? @unique
+  kwikTrackingUrl String?
+  kwikRawResponse Json?
+
+  kwikUniqueOrderId    String?
+  kwikJobStatus        Int?
+  kwikStatusCheckUrl   String?
+  lastWebhookAt        DateTime?
+  lastStatusCheckAt    DateTime?
+  statusCheckAttempts  Int       @default(0)
+  nextStatusCheckAt    DateTime?
+  lastStatusCheckError String?
+
+  deliveredAt            DateTime?
+  kwikLastTerminalStatus Int?
+
+  // âœ… NEW: chosen vehicle for this delivery
+  kwikVehicleId    Int?
+  kwikVehicleLabel String? // BIKE | SUV | VAN
+  totalWeightKg    Float? // snapshot at dispatch time
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([processingStatus])
+  @@index([requiresManualDispatch])
+  @@index([scheduledDispatchAt])
+  @@index([kwikUniqueOrderId])
+  @@index([nextStatusCheckAt])
+}
+
+model VendorOrder {
+  id String @id @default(uuid())
+
+  orderId         String
+  vendorId        String
+  marketClusterId String
+
+  status String @default("PENDING_PAYMENT")
+
+  pickupLocationId  String?
+  pickupAddress     String
+  pickupLat         Float
+  pickupLng         Float
+  pickupContactName String?
+  pickupPhone       String?
+
+  confirmedAt      DateTime?
+  packingStartedAt DateTime?
+  readyForPickupAt DateTime?
+  pickedUpAt       DateTime?
+  cancelledAt      DateTime?
+
+  grossAmountNgn         Int       @default(0)
+  commissionRateBps      Int       @default(1000)
+  commissionAmountNgn    Int       @default(0)
+  payableAmountNgn       Int       @default(0)
+  settlementStatus       String    @default("NOT_ELIGIBLE")
+  settlementCalculatedAt DateTime?
+  settlementEligibleAt   DateTime?
+  settlementPaidAt       DateTime?
+
+  rejectionReason String?
+  readinessNote   String?
+
+  items           VendorOrderItem[]
+  readinessEvents VendorOrderReadinessEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, vendorId])
+  @@index([orderId])
+  @@index([vendorId])
+  @@index([marketClusterId])
+  @@index([status])
+}
+
+model VendorSettlement {
+  id String @id @default(uuid())
+
+  vendorId        String
+  orderId         String
+  vendorOrderId   String @unique
+  marketClusterId String
+
+  status String @default("PENDING_PAYOUT")
+
+  grossAmountNgn      Int
+  commissionRateBps   Int
+  commissionAmountNgn Int
+  payableAmountNgn    Int
+  currency            String @default("NGN")
+
+  eligibleAt      DateTime  @default(now())
+  paidAt          DateTime?
+  payoutReference String?
+  metadata        Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([orderId])
+  @@index([marketClusterId])
+  @@index([status])
+  @@index([eligibleAt])
+}
+
+model VendorLedgerEntry {
+  id String @id @default(uuid())
+
+  vendorId      String
+  orderId       String?
+  vendorOrderId String?
+  settlementId  String?
+
+  entryType String
+  direction String
+  amountNgn Int
+  currency  String @default("NGN")
+
+  idempotencyKey String  @unique
+  description    String?
+  metadata       Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([vendorId])
+  @@index([orderId])
+  @@index([vendorOrderId])
+  @@index([settlementId])
+  @@index([entryType])
+  @@index([direction])
+  @@index([createdAt])
+}
+
+model VendorOrderItem {
+  id String @id @default(uuid())
+
+  vendorOrder   VendorOrder @relation(fields: [vendorOrderId], references: [id], onDelete: Cascade)
+  vendorOrderId String
+
+  orderItemId      String  @unique
+  productId        String
+  productVariantId String?
+
+  quantity     Int
+  unitPriceNgn Int
+  subtotalNgn  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorOrderId])
+  @@index([productId])
+  @@index([productVariantId])
+}
+
+model VendorOrderReadinessEvent {
+  id String @id @default(uuid())
+
+  vendorOrder   VendorOrder @relation(fields: [vendorOrderId], references: [id], onDelete: Cascade)
+  vendorOrderId String
+
+  orderId     String
+  vendorId    String
+  actorUserId String?
+
+  type     String
+  note     String?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([vendorOrderId])
+  @@index([orderId])
+  @@index([vendorId])
+  @@index([type])
+}
+
+model DeliveryQuote {
+  id String @id @default(uuid())
+
+  userId          String?
+  cartId          String?
+  orderId         String?
+  marketClusterId String
+
+  pickupCount   Int    @default(0)
+  deliveryCount Int    @default(1)
+  currency      String @default("NGN")
+
+  kwikPerTaskCostNgn        Int?
+  kwikTotalServiceChargeNgn Int?
+  kwikPayableAmountNgn      Int?
+  kwikNetPayableAmountNgn   Int?
+  kwikDeliveryChargeNgn     Int?
+  kwikSurgeCostNgn          Int?
+  kwikSurgeType             Int?
+  kwikVehicleId             Int?
+  kwikVehicleName           String?
+
+  amountToChargeCustomerNgn Int @default(0)
+
+  rawQuoteRequest  Json
+  rawQuoteResponse Json?
+  rawBillRequest   Json?
+  rawBillResponse  Json?
+
+  quoteExpiresAt DateTime
+  status         DeliveryQuoteStatus @default(DRAFT)
+  error          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([cartId])
+  @@index([orderId])
+  @@index([marketClusterId])
+  @@index([status])
+  @@index([quoteExpiresAt])
+}
+
+model KwikDeliveryTask {
+  id String @id @default(uuid())
+
+  orderId         String?
+  deliveryId      String? @unique
+  deliveryQuoteId String?
+  marketClusterId String?
+
+  status KwikDeliveryTaskStatus @default(PENDING)
+
+  pickupCount   Int @default(0)
+  deliveryCount Int @default(1)
+
+  kwikUniqueOrderId  String? @unique
+  kwikPickupJobIds   Json?
+  kwikDeliveryJobIds Json?
+  kwikJobToken       String?
+  kwikStatusCheckUrl String?
+  kwikTrackingLinks  Json?
+
+  rawCreateRequest  Json
+  rawCreateResponse Json?
+  error             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([deliveryQuoteId])
+  @@index([marketClusterId])
+  @@index([status])
+}
+
+model DeliveryWebhookEvent {
+  id       String @id @default(cuid())
+  provider String @default("KWIK")
+
+  // Deduplication hash (webhook can retry)
+  dedupeHash String @unique
+
+  jobId         String?
+  uniqueOrderId String?
+  jobStatus     Int?
+
+  payload     Json
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  status      String    @default("RECEIVED") // RECEIVED | PROCESSED | FAILED
+  error       String?
+
+  @@index([jobId])
+  @@index([uniqueOrderId])
+  @@index([status])
+}
+
+model PaymentAttempt {
+  id String @id @default(uuid())
+
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  provider  PaymentProvider
+  reference String          @unique
+  status    PaymentStatus   @default(PENDING)
+
+  amountNgn Int
+  currency  String @default("NGN")
+
+  rawInit   Json?
+  rawVerify Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([provider])
+  @@index([status])
+}
+
+model OrderItem {
+  id      String @id @default(uuid())
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
+  productVariantId String?
+
+  productReview ProductReview?
+
+  quantity     Int
+  unitPriceNgn Int
+  subtotalNgn  Int
+
+  createdAt DateTime @default(now())
+}
+
+model ProductReview {
+  id String @id @default(uuid())
+
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  orderItemId String    @unique
+
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  rating  Int
+  comment String?
+
+  status ReviewStatus @default(PUBLISHED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, status])
+  @@index([userId])
+  @@index([orderId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model VendorReview {
+  id String @id @default(uuid())
+
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+  vendorId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  rating  Int
+  comment String?
+
+  status ReviewStatus @default(PUBLISHED)
+
+  vendorReply     String?
+  vendorRepliedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, vendorId])
+  @@index([vendorId, status])
+  @@index([userId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model Discount {
+  id          String  @id @default(uuid())
+  title       String
+  description String?
+
+  type           DiscountType
+  percentageOff  Int?
+  fixedAmountOff Int?
+
+  appliesToAll Boolean @default(false)
+  productIds   Json?
+
+  isActive Boolean   @default(false)
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([startsAt])
+  @@index([endsAt])
+}
+
+model B2BLead {
+  id            String  @id @default(uuid())
+  businessName  String
+  contactPerson String
+  email         String?
+  phone         String
+
+  businessType   String?
+  orderFrequency String?
+
+  // Kept for backwards compatibility with the original model.
+  estMonthlyVolume String?
+
+  message String?
+
+  status LeadStatus @default(NEW)
+
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([phone])
+  @@index([email])
+  @@index([createdAt])
+}
+
+model SiteSettings {
+  id             Int     @id @default(1)
+  companyEmail   String
+  companyPhone   String
+  whatsappNumber String?
+  address        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+//
+// âœ… Persistent Cart
+// - 1 cart per user (userId is unique on Cart)
+// - Prevent duplicates via unique constraint (cartId + productId + productVariantId)
+//
+model Cart {
+  id String @id @default(uuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  marketCluster   MarketCluster? @relation(fields: [marketClusterId], references: [id])
+  marketClusterId String?
+
+  items CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([marketClusterId])
+}
+
+model CartItem {
+  id String @id @default(uuid())
+
+  cart   Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  cartId String
+
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
+  productVariantId String?
+
+  quantity Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // âœ… prevents duplicates for same product+variant in same cart
+  // Note: Postgres allows multiple NULLs in unique constraints,
+  // so variant=null rows may still duplicate. We'll handle that in API with upsert logic.
+  @@unique([cartId, productId, productVariantId])
+  @@index([cartId])
+  @@index([productId])
+  @@index([productVariantId])
+}
+
+model MarketCluster {
+  id String @id @default(uuid())
+
+  name        String
+  slug        String  @unique
+  description String?
+
+  city  String
+  state String
+
+  centerAddress String
+  centerLat     Float
+  centerLng     Float
+  radiusKm      Float  @default(2)
+
+  pickupAddress String?
+  pickupLat     Float?
+  pickupLng     Float?
+
+  isActive Boolean @default(true)
+  metadata Json?
+
+  vendors               Vendor[]
+  products              Product[]
+  carts                 Cart[]
+  orders                Order[]
+  vendorPickupLocations VendorPickupLocation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([city, state])
+  @@index([isActive])
+  @@index([centerLat, centerLng])
+}
+
+model Vendor {
+  id String @id @default(uuid())
+
+  displayName String
+  slug        String  @unique
+  legalName   String?
+  description String?
+
+  email        String? @unique
+  phone        String?
+  supportPhone String?
+
+  logoUrl       String?
+  coverImageUrl String?
+
+  businessRegistrationNumber String?
+  status                     VendorStatus @default(DRAFT)
+  isActive                   Boolean      @default(false)
+  isVisible                  Boolean      @default(false)
+
+  commissionRateBps     Int    @default(1000) // 1000 = 10.00%
+  settlementHoldDays    Int    @default(0)
+  settlementMode        String @default("MANUAL_PAYOUT")
+  minimumPayoutNgn      Int    @default(0)
+  payableBalanceNgn     Int    @default(0)
+  pendingSettlementNgn  Int    @default(0)
+  lifetimeGrossSalesNgn Int    @default(0)
+  lifetimeCommissionNgn Int    @default(0)
+  lifetimePaidOutNgn    Int    @default(0)
+
+  marketCluster   MarketCluster @relation(fields: [marketClusterId], references: [id])
+  marketClusterId String
+
+  adminNotes  String?
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+  suspendedAt DateTime?
+
+  users           VendorUser[]
+  verification    VendorVerification?
+  agreements      VendorAgreement[]
+  bankAccounts    VendorBankAccount[]
+  pickupLocations VendorPickupLocation[]
+  products        Product[]
+
+  ratingAverage Float @default(0)
+  ratingCount   Int   @default(0)
+
+  reviews VendorReview[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([marketClusterId])
+  @@index([status])
+  @@index([isActive, isVisible])
+}
+
+model VendorUser {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendorId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  role     VendorUserRole @default(OWNER)
+  isActive Boolean        @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([vendorId, userId])
+  @@index([userId])
+  @@index([vendorId, role])
+}
+
+model VendorVerification {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendorId String @unique
+
+  status VendorVerificationStatus @default(PENDING)
+
+  identityStatus      VendorVerificationStatus @default(PENDING)
+  businessStatus      VendorVerificationStatus @default(PENDING)
+  contactStatus       VendorVerificationStatus @default(PENDING)
+  bankStatus          VendorVerificationStatus @default(PENDING)
+  productReviewStatus VendorVerificationStatus @default(PENDING)
+
+  submittedAt       DateTime?
+  reviewedAt        DateTime?
+  reviewedByAdminId String?
+  rejectionReason   String?
+  metadata          Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model VendorAgreement {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendorId String
+
+  title       String
+  version     String
+  documentUrl String?
+  status      VendorAgreementStatus @default(PENDING)
+
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  acceptedIp       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([vendorId, title, version])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model VendorBankAccount {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendorId String
+
+  bankName      String
+  bankCode      String?
+  accountNumber String
+  accountName   String
+  isDefault     Boolean @default(false)
+
+  verificationStatus    VendorVerificationStatus @default(PENDING)
+  paystackRecipientCode String?
+  rawVerification       Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([isDefault])
+}
+
+model VendorPickupLocation {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendorId String
+
+  marketCluster   MarketCluster @relation(fields: [marketClusterId], references: [id])
+  marketClusterId String
+
+  label       String
+  address     String
+  latitude    Float
+  longitude   Float
+  contactName String?
+  phone       String?
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  verificationStatus VendorVerificationStatus @default(PENDING)
+  verifiedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([marketClusterId])
+  @@index([isDefault])
+  @@index([isActive])
+}
+
+model ApiConsoleExecutionRateLimit {
+  admin   User   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  adminId String
+
+  routeId         String
+  windowStartedAt DateTime
+  executionCount  Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  @@id([adminId, routeId, windowStartedAt])
+  @@index([updatedAt])
+}
+
+model ApiConsoleExecutionLog {
+  id String @id @default(uuid())
+
+  admin   User   @relation(fields: [adminId], references: [id])
+  adminId String
+
+  actorUserId String?
+
+  routeId     String
+  method      String
+  path        String
+  environment String
+
+  reason             String
+  confirmationPhrase String?
+
+  requestPathParams Json?
+  requestQuery      Json?
+  requestBody       Json?
+  responsePreview   Json?
+
+  outcome      ApiConsoleExecutionOutcome
+  statusCode   Int?
+  durationMs   Int?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+
+  @@index([adminId, createdAt])
+  @@index([routeId, createdAt])
+}
+
+model Notification {
+  id String @id @default(uuid())
+
+  eventType String
+  category  String @default("SYSTEM")
+  priority  String @default("NORMAL")
+
+  title       String
+  body        String
+  actionUrl   String?
+  actionLabel String?
+  imageUrl    String?
+
+  actorUserId     String?
+  orderId         String?
+  vendorId        String?
+  vendorOrderId   String?
+  deliveryId      String?
+  marketClusterId String?
+
+  metadata Json?
+
+  recipients NotificationRecipient[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventType])
+  @@index([category])
+  @@index([priority])
+  @@index([orderId])
+  @@index([vendorId])
+  @@index([vendorOrderId])
+  @@index([deliveryId])
+  @@index([marketClusterId])
+  @@index([createdAt])
+}
+
+model NotificationRecipient {
+  id String @id @default(uuid())
+
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  notificationId String
+
+  recipientUserId String?
+  recipientRole   String
+  vendorId        String?
+
+  status       String    @default("UNREAD")
+  readAt       DateTime?
+  archivedAt   DateTime?
+  deliveredAt  DateTime?
+  pushSentAt   DateTime?
+  pushFailedAt DateTime?
+
+  attempts NotificationDeliveryAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([notificationId])
+  @@index([recipientUserId])
+  @@index([recipientRole])
+  @@index([vendorId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PushDeviceToken {
+  id String @id @default(uuid())
+
+  userId String
+  role   String @default("CUSTOMER")
+
+  vendorId String?
+
+  token    String  @unique
+  platform String
+  deviceId String?
+
+  appVersion String?
+  userAgent  String?
+
+  isActive Boolean @default(true)
+
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([role])
+  @@index([vendorId])
+  @@index([isActive])
+  @@index([lastSeenAt])
+}
+
+model NotificationPreference {
+  id String @id @default(uuid())
+
+  userId String
+  role   String @default("CUSTOMER")
+
+  vendorId String?
+  category String
+
+  inAppEnabled Boolean @default(true)
+  pushEnabled  Boolean @default(true)
+  emailEnabled Boolean @default(false)
+  smsEnabled   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, role, vendorId, category])
+  @@index([userId])
+  @@index([role])
+  @@index([vendorId])
+  @@index([category])
+}
+
+model NotificationDeliveryAttempt {
+  id String @id @default(uuid())
+
+  notificationRecipient   NotificationRecipient @relation(fields: [notificationRecipientId], references: [id], onDelete: Cascade)
+  notificationRecipientId String
+
+  channel String
+  status  String @default("PENDING")
+
+  provider        String?
+  providerMessage String?
+  providerId      String?
+  error           String?
+
+  attemptedAt DateTime @default(now())
+
+  @@index([notificationRecipientId])
+  @@index([channel])
+  @@index([status])
+  @@index([provider])
+  @@index([attemptedAt])
+}
+
+model CustomerFeedback {
+  id String @id @default(uuid())
+
+  orderId String
+  userId  String?
+
+  rating  Int
+  comment String?
+  tags    Json?
+
+  status     String    @default("NEW")
+  adminNote  String?
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, userId])
+  @@index([orderId])
+  @@index([userId])
+  @@index([rating])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model MediaAsset {
+  id String @id @default(uuid())
+
+  storageProvider MediaStorageProvider @default(FIREBASE_STORAGE)
+  bucket          String
+  storagePath     String               @unique
+  downloadToken   String?
+  publicUrl       String?
+
+  mediaType        MediaType
+  purpose          String    @default("GENERAL")
+  contentType      String
+  originalFilename String?
+  sizeBytes        Int?
+
+  ownerType MediaOwnerType
+  ownerId   String
+
+  productId        String?
+  vendorId         String?
+  orderId          String?
+  vendorOrderId    String?
+  feedbackId       String?
+  uploadedByUserId String?
+
+  approvalStatus    MediaApprovalStatus @default(PENDING_REVIEW)
+  approvedAt        DateTime?
+  approvedByAdminId String?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  deletedAt         DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([storageProvider])
+  @@index([mediaType])
+  @@index([ownerType, ownerId])
+  @@index([productId])
+  @@index([vendorId])
+  @@index([orderId])
+  @@index([vendorOrderId])
+  @@index([feedbackId])
+  @@index([uploadedByUserId])
+  @@index([approvalStatus])
+  @@index([createdAt])
+}
+
+model CustomerOAuthAccount {
+  id String @id @default(uuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  provider          String
+  providerAccountId String
+
+  email         String?
+  emailVerified Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@index([provider])
+  @@index([email])
+}
+
+model AuthOtpChallenge {
+  id      String         @id @default(uuid())
+  purpose AuthOtpPurpose
+  email   String
+
+  // The OTP itself is never stored.
+  // Only an HMAC-SHA256 digest is stored.
+  codeHash String
+
+  // Used only while a customer signup is pending.
+  pendingName         String?
+  pendingPhone        String?
+  pendingPasswordHash String?
+
+  attempts Int @default(0)
+
+  sendCount           Int      @default(1)
+  sendWindowStartedAt DateTime @default(now())
+
+  expiresAt         DateTime
+  resendAvailableAt DateTime
+  consumedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([purpose, email])
+  @@index([email])
+  @@index([pendingPhone])
+  @@index([expiresAt])
+  @@index([consumedAt])
+}

@@ -49,8 +49,8 @@ type VendorPickupLocationSnapshot = {
   id: string;
   label: string;
   address: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
   contactName: string | null;
   phone: string | null;
   isDefault: boolean;
@@ -122,16 +122,22 @@ type OrderForDispatch = {
 function pickDefaultPickupLocation(
   vendorName: string,
   locations: VendorPickupLocationSnapshot[]
-): VendorPickupLocationSnapshot {
-  const activeLocations = locations.filter((location) => location.isActive);
-  const selected =
-    activeLocations.find((location) => location.isDefault) ?? activeLocations[0] ?? null;
+): VendorPickupLocationSnapshot & { latitude: number; longitude: number } {
+  const activeLocations = locations.filter(
+    (location) =>
+      location.isActive &&
+      typeof location.latitude === "number" &&
+      Number.isFinite(location.latitude) &&
+      typeof location.longitude === "number" &&
+      Number.isFinite(location.longitude)
+  );
+  const selected = activeLocations.find((location) => location.isDefault) ?? activeLocations[0] ?? null;
 
   if (!selected) {
-    throw new Error(`${vendorName} does not have an active pickup location`);
+    throw new Error(`${vendorName} is not delivery-ready because no precise pickup location has been captured`);
   }
 
-  return selected;
+  return selected as VendorPickupLocationSnapshot & { latitude: number; longitude: number };
 }
 
 function groupOrderItemsByVendor(items: OrderItemForVendorOrder[]) {
