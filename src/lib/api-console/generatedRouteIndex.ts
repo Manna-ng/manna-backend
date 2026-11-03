@@ -56,14 +56,14 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/admin/deliveries/route.ts"
   },
   {
-    "method": "POST",
-    "path": "/api/admin/deliveries/[deliveryId]/dispatch",
-    "sourceFile": "src/app/api/admin/deliveries/[deliveryId]/dispatch/route.ts"
-  },
-  {
     "method": "GET",
     "path": "/api/admin/deliveries/[id]",
     "sourceFile": "src/app/api/admin/deliveries/[id]/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/deliveries/[id]/dispatch",
+    "sourceFile": "src/app/api/admin/deliveries/[id]/dispatch/route.ts"
   },
   {
     "method": "GET",

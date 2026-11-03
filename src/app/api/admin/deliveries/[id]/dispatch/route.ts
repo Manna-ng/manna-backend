@@ -5,10 +5,10 @@ import { createDeliveryFromOrder } from "@/lib/delivery/createDeliveryFromOrder"
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: Promise<{ deliveryId: string }> }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { deliveryId } = await params;
+    const { id: deliveryId } = await params;
     const admin = await requireAdmin();
 
     if (!admin.ok) {

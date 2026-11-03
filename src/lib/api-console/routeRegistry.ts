@@ -678,15 +678,15 @@ const documentedMannaApiRoutes: ApiRouteDefinition[] = [
     module: "Admin Operations",
     title: "Dispatch Queued Delivery",
     method: "POST",
-    path: "/api/admin/deliveries/[deliveryId]/dispatch",
-    sourceFile: "src/app/api/admin/deliveries/[deliveryId]/dispatch/route.ts",
+    path: "/api/admin/deliveries/[id]/dispatch",
+    sourceFile: "src/app/api/admin/deliveries/[id]/dispatch/route.ts",
     auth: "Admin",
     safety: "CONTROLLED_ACTION",
     description: "Dispatches a queued delivery through the central, vehicle-aware KWIK delivery service.",
     usage: "Keep disabled in generic Backend Console execution until staging proves a real queued delivery can create one KWIK task and persist its tracking details.",
     pathParams: [
       {
-        name: "deliveryId",
+        name: "id",
         description: "Queued Delivery UUID.",
         example: "uuid",
       },
