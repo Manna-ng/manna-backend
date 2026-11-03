@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { VariantUnit } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOwnedVendorProduct } from "@/lib/vendors/vendorProductManagement";
+import { notifyVendorStockState } from "@/lib/notifications/eventTriggers";
 
 export async function PATCH(
   req: NextRequest,
@@ -104,6 +105,9 @@ export async function DELETE(
 
     await prisma.productVariant.delete({ where: { id: variantId } });
     await prisma.product.update({ where: { id }, data: { approvalStatus: "PENDING_REVIEW" } as never });
+
+    await notifyVendorStockState(variantId).catch(() => undefined);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("VENDOR_VARIANT_DELETE_ERROR", error);

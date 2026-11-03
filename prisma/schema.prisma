@@ -358,6 +358,7 @@ model Order {
   items    OrderItem[]
   delivery Delivery?
   payments PaymentAttempt[]
+  refund OrderRefund?
 
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -471,7 +472,7 @@ model VendorSettlement {
   vendorOrderId   String @unique
   marketClusterId String
 
-  status String @default("PENDING_PAYOUT")
+  status String @default("AVAILABLE")
 
   grossAmountNgn      Int
   commissionRateBps   Int
@@ -519,6 +520,44 @@ model VendorLedgerEntry {
   @@index([settlementId])
   @@index([entryType])
   @@index([direction])
+  @@index([createdAt])
+}
+
+model VendorWithdrawal {
+  id String @id @default(uuid())
+
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  vendorId String
+
+  bankAccount   VendorBankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  bankAccountId String
+
+  amountNgn Int
+  currency  String @default("NGN")
+
+  status String @default("INITIATING")
+
+  reference     String @unique
+  recipientCode String?
+  transferCode  String?
+  failureReason String?
+
+  requestedByUserId String?
+
+  requestedAt  DateTime  @default(now())
+  processingAt DateTime?
+  succeededAt  DateTime?
+  failedAt     DateTime?
+  reversedAt   DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([bankAccountId])
+  @@index([status])
   @@index([createdAt])
 }
 
@@ -665,6 +704,29 @@ model DeliveryWebhookEvent {
   @@index([status])
 }
 
+model OrderRefund {
+  id String @id @default(uuid())
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId String @unique
+  paymentReference String
+  amountNgn Int
+  currency String @default("NGN")
+  status String @default("REQUESTED")
+  providerRefundId String? @unique
+  createdByAdminId String
+  reason String
+  providerRequestedAt DateTime?
+  providerUpdatedAt DateTime?
+  processedAt DateTime?
+  failedAt DateTime?
+  failureReason String?
+  reviewRequired Boolean @default(false)
+  providerResponse Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, createdAt])
+  @@index([paymentReference])
+}
 model PaymentAttempt {
   id String @id @default(uuid())
 
@@ -940,6 +1002,7 @@ model Vendor {
   minimumPayoutNgn      Int    @default(0)
   payableBalanceNgn     Int    @default(0)
   pendingSettlementNgn  Int    @default(0)
+  reservedWithdrawalNgn Int @default(0)
   lifetimeGrossSalesNgn Int    @default(0)
   lifetimeCommissionNgn Int    @default(0)
   lifetimePaidOutNgn    Int    @default(0)
@@ -970,6 +1033,8 @@ model Vendor {
   @@index([marketClusterId])
   @@index([status])
   @@index([isActive, isVisible])
+
+  withdrawals VendorWithdrawal[]
 }
 
 model VendorUser {
@@ -1062,6 +1127,8 @@ model VendorBankAccount {
 
   @@index([vendorId])
   @@index([isDefault])
+
+  withdrawals VendorWithdrawal[]
 }
 
 model VendorPickupLocation {
@@ -1076,7 +1143,8 @@ model VendorPickupLocation {
   label       String
   address     String
   latitude    Float?
-  longitude   Float?
+  longitude   Float?
+
   accuracy Float?
   capturedAt DateTime?
   contactName String?

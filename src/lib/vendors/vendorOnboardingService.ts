@@ -1,3 +1,7 @@
+import {
+  notifyAdminVendorRegistered,
+  notifyVendorApproved,
+} from "@/lib/notifications/eventTriggers";
   import { prisma } from "@/lib/prisma";
 import type { VendorStatus } from "@prisma/client";
 
@@ -608,6 +612,10 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
       });
     });
 
+    await notifyAdminVendorRegistered(
+      vendor.id
+    ).catch(() => undefined);
+
     return {
       submitted: true,
       summary: computeVendorOnboardingSummary(updated as VendorWithRelations),
@@ -708,6 +716,10 @@ productReviewStatus: optionalVendorVerificationStatus(body.productReviewStatus),
         data: { verificationStatus: "APPROVED", verifiedAt: now },
       });
     });
+
+    await notifyVendorApproved(
+      vendorId
+    ).catch(() => undefined);
 
     return getVendorApplicationForAdmin(vendorId);
   }

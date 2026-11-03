@@ -1,3 +1,4 @@
+import { notifyOrderCancelledStakeholders } from "@/lib/notifications/eventTriggers";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
@@ -42,6 +43,10 @@ export async function POST(
       where: { id },
       data: { status: "CANCELLED" },
     });
+
+    await notifyOrderCancelledStakeholders(
+      id
+    ).catch(() => undefined);
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err) {

@@ -3,8 +3,13 @@ import { NextResponse } from "next/server";
 
 import { verifyAuthToken } from "@/lib/auth";
 import { quoteKwikMarketplaceDelivery } from "@/lib/kwik/quoteService";
+import {
+  KwikVehicleSelectionError,
+  selectKwikVehicleForWeight,
+} from "@/lib/kwik/vehicleService";
 import type { VendorPickupInput } from "@/lib/kwik/payloadBuilder";
 import { prisma } from "@/lib/prisma";
+import { optimizePickupOrder } from "@/lib/delivery/routeOptimizer";
 
 type PickupLocationForQuote = {
   id: string;
@@ -156,19 +161,43 @@ function buildPickups(
   );
 }
 
-function calculateParcelAmount(
+function calculateTotalWeightKg(
   cart: CartForQuote
-) {
-  return cart.items.reduce(
-    (total, item) =>
-      total +
-      (item.productVariant
-        ?.priceNgn ?? 0) *
-        item.quantity,
-    0
+): number {
+  let totalWeightKg = 0;
+
+  for (const item of cart.items) {
+    const variant = item.productVariant;
+    const unitWeightKg = variant?.unitWeightKg;
+
+    if (
+      !variant ||
+      typeof unitWeightKg !== "number" ||
+      !Number.isFinite(unitWeightKg) ||
+      unitWeightKg <= 0
+    ) {
+      throw new Error(
+        `PRODUCT_WEIGHT_REQUIRED:${item.product.name}`
+      );
+    }
+
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+      throw new Error(
+        `INVALID_CART_QUANTITY:${item.product.name}`
+      );
+    }
+
+    totalWeightKg +=
+      unitWeightKg *
+      item.quantity;
+  }
+
+  return (
+    Math.round(
+      totalWeightKg * 1000
+    ) / 1000
   );
 }
-
 export async function POST() {
   try {
     const cookieStore =
@@ -482,12 +511,97 @@ export async function POST() {
       );
     }
 
+    let totalWeightKg: number;
+
+    try {
+      totalWeightKg =
+        calculateTotalWeightKg(
+          cart as CartForQuote
+        );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Product delivery weight is invalid";
+
+      if (
+        message.startsWith(
+          "PRODUCT_WEIGHT_REQUIRED:"
+        )
+      ) {
+        const productName =
+          message.slice(
+            "PRODUCT_WEIGHT_REQUIRED:".length
+          );
+
+        return NextResponse.json(
+          {
+            code:
+              "PRODUCT_WEIGHT_REQUIRED",
+            message:
+              `${productName} cannot be quoted for delivery until its variant weight is configured.`,
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      if (
+        message.startsWith(
+          "INVALID_CART_QUANTITY:"
+        )
+      ) {
+        return NextResponse.json(
+          {
+            code:
+              "INVALID_CART_QUANTITY",
+            message:
+              "Cart contains an invalid quantity.",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      throw error;
+    }
+
+    let selectedVehicle;
+
+    try {
+      selectedVehicle =
+        await selectKwikVehicleForWeight(
+          totalWeightKg
+        );
+    } catch (error) {
+      if (
+        error instanceof
+        KwikVehicleSelectionError
+      ) {
+        return NextResponse.json(
+          {
+            code: error.code,
+            message: error.message,
+            totalWeightKg,
+            maxCapacityKg:
+              error.maxCapacityKg,
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      throw error;
+    }
+
     const pickups =
       buildPickups(
         cart as CartForQuote
       );
-
-    if (
+if (
       pickups.length === 0
     ) {
       return NextResponse.json(
@@ -500,6 +614,17 @@ export async function POST() {
         }
       );
     }
+
+    const optimizedPickups =
+      optimizePickupOrder(
+        pickups,
+        {
+          latitude:
+            deliveryLatitude,
+          longitude:
+            deliveryLongitude,
+        }
+      );
 
     const deliveryAddress = [
       delivery.address1,
@@ -524,8 +649,12 @@ export async function POST() {
     const quote =
       await quoteKwikMarketplaceDelivery(
         {
-          pickups,
+          pickups: optimizedPickups,
+          vehicleId:
+            selectedVehicle.vehicleId,
 
+          vehicleName:
+            selectedVehicle.name,
           delivery: {
             name:
               customer.name,
@@ -552,10 +681,6 @@ export async function POST() {
               undefined,
           },
 
-          parcelAmountNgn:
-            calculateParcelAmount(
-              cart as CartForQuote
-            ),
         }
       );
 
@@ -715,7 +840,7 @@ export async function POST() {
         },
 
         pickupVendors:
-          pickups.map(
+          optimizedPickups.map(
             (pickup) => ({
               vendorId:
                 pickup.vendorId,

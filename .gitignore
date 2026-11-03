@@ -49,8 +49,17 @@ next-env.d.ts
 .env.staging.local
 .env.staging
 .env.production
-!.env.development.example
-!.env.staging.example
-!.env.production.example
-.env.staging.example
-.env.production.example
+
+# BEGIN MANNA ENV BOUNDARY
+# Real environment files are private.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.staging
+.env.staging.local
+.env.production
+.env.production.local
+
+# Example/template files are safe to version after sanitisation.
+# END MANNA ENV BOUNDARY

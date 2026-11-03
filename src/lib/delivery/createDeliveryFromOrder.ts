@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { createKwikDelivery } from "@/services/kwikWebhook";
-import { pickKwikVehicle } from "@/lib/delivery/vehiclePicker";
+import { selectKwikVehicleForWeight } from "@/lib/kwik/vehicleService";
 
 export async function createDeliveryFromOrder(orderId: string) {
   const order = await prisma.order.findUnique({
@@ -13,67 +13,133 @@ export async function createDeliveryFromOrder(orderId: string) {
   });
 
   if (!order) throw new Error("Order not found");
-  if (order.delivery) return order.delivery;
 
-  if (!Number.isFinite(order.deliveryLat ?? NaN) || !Number.isFinite(order.deliveryLng ?? NaN)) {
-    throw new Error("Order is missing deliveryLat/deliveryLng (required for KWIK)");
+  if (order.deliveryQuoteId) {
+    throw new Error(
+      "Marketplace orders must be dispatched through the vendor-readiness stored-quote flow"
+    );
   }
 
-  // ✅ Compute totalKg from variants
+  if (order.delivery?.kwikTaskId || order.delivery?.kwikUniqueOrderId) {
+    return order.delivery;
+  }
+
+  if (
+    !Number.isFinite(order.deliveryLat ?? NaN) ||
+    !Number.isFinite(order.deliveryLng ?? NaN)
+  ) {
+    throw new Error(
+      "Order is missing deliveryLat/deliveryLng (required for KWIK)"
+    );
+  }
+
   let totalKg = 0;
 
-  for (const it of order.items) {
-    const kg = it.productVariant?.unitWeightKg;
-    if (!Number.isFinite(kg ?? NaN)) {
-      // choose one policy:
-      // 1) fail hard so admin fixes weight
-      throw new Error(`Missing unitWeightKg for variant in order (product: ${it.product?.name ?? "Unknown"})`);
-      // 2) OR default to 0, but that can choose wrong vehicle:
-      // continue;
+  for (const item of order.items) {
+    const kg = item.productVariant?.unitWeightKg;
+
+    if (
+      typeof kg !== "number" ||
+      !Number.isFinite(kg) ||
+      kg <= 0
+    ) {
+      throw new Error(
+        `Missing or invalid unitWeightKg for variant in order (product: ${item.product?.name ?? "Unknown"})`
+      );
     }
-    totalKg += Number(kg) * it.quantity;
+
+    totalKg +=
+      kg *
+      item.quantity;
   }
 
-  const { label, vehicleId } = pickKwikVehicle(totalKg);
+  totalKg =
+    Math.round(totalKg * 1000) /
+    1000;
 
-  // ✅ Call KWIK
+  const selectedVehicle =
+    await selectKwikVehicleForWeight(
+      totalKg
+    );
+
   const kwik = await createKwikDelivery({
     orderId: order.id,
-    customerName: order.user?.name ?? "Customer",
-    customerPhone: order.user?.phone ?? "",
-    address: order.deliveryAddress1,
-    city: order.city,
-    state: order.state,
-    deliveryLat: order.deliveryLat!,
-    deliveryLng: order.deliveryLng!,
-    amountNgn: order.deliveryFeeNgn,
-    vehicleId, // ✅ key change
+    customerName:
+      order.user?.name ??
+      "Customer",
+    customerPhone:
+      order.user?.phone ??
+      "",
+    address:
+      order.deliveryAddress1,
+    city:
+      order.city,
+    state:
+      order.state,
+    deliveryLat:
+      order.deliveryLat!,
+    deliveryLng:
+      order.deliveryLng!,
+    amountNgn:
+      order.deliveryFeeNgn,
+    vehicleId:
+      selectedVehicle.vehicleId,
   });
 
-  // ✅ Save delivery + snapshots
-  const delivery = await prisma.delivery.create({
-    data: {
-      orderId: order.id,
-      partner: "KWIK",
-      status: "CREATED",
-      kwikTaskId: String(kwik.taskId),
-      kwikTrackingUrl: kwik.trackingUrl,
-      kwikRawResponse: JSON.stringify(kwik.raw),
-      kwikUniqueOrderId: kwik.uniqueOrderId,
-      kwikJobStatus: 1,
-      kwikStatusCheckUrl: kwik.statusCheckUrl,
+  const deliveryData = {
+    partner: "KWIK" as const,
+    status: "CREATED" as const,
+    processingStatus:
+      "DISPATCHED" as const,
+    requiresManualDispatch:
+      false,
+    dispatchDeferredReason:
+      null,
+    kwikTaskId:
+      String(kwik.taskId),
+    kwikTrackingUrl:
+      kwik.trackingUrl,
+    kwikRawResponse:
+      JSON.stringify(kwik.raw),
+    kwikUniqueOrderId:
+      kwik.uniqueOrderId,
+    kwikJobStatus:
+      1,
+    kwikStatusCheckUrl:
+      kwik.statusCheckUrl,
+    kwikVehicleId:
+      selectedVehicle.vehicleId,
+    kwikVehicleLabel:
+      selectedVehicle.name,
+    totalWeightKg:
+      totalKg,
+  };
 
-      // NEW snapshots
-      kwikVehicleId: vehicleId,
-      kwikVehicleLabel: label,
-      totalWeightKg: totalKg,
-    },
-  });
+  const delivery =
+    order.delivery
+      ? await prisma.delivery.update({
+          where: {
+            id: order.delivery.id,
+          },
+          data: deliveryData,
+        })
+      : await prisma.delivery.create({
+          data: {
+            orderId: order.id,
+            ...deliveryData,
+          },
+        });
 
-  // also store on Order (optional but useful)
   await prisma.order.update({
-    where: { id: order.id },
-    data: { totalWeightKg: totalKg, status: "OUT_FOR_DELIVERY" },
+    where: {
+      id: order.id,
+    },
+    data: {
+      totalWeightKg:
+        totalKg,
+      status:
+        "OUT_FOR_DELIVERY",
+    },
   });
 
   return delivery;

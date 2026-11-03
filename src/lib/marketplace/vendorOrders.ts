@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { guardV14OrderMutationIfReleased, isV14OrderLockReleased } from "@/lib/marketplace/orderV14ReleaseGuard";
 import { createKwikMarketplaceTaskFromStoredQuote } from "@/lib/kwik/quoteService";
 
 type JsonRecord = Record<string, unknown>;
@@ -73,6 +74,7 @@ type OrderItemForVendorOrder = {
       id: string;
       displayName: string;
       marketClusterId: string;
+      commissionRateBps: number;
       pickupLocations: VendorPickupLocationSnapshot[];
     } | null;
   };
@@ -171,7 +173,9 @@ function asJsonRecord(value: unknown): JsonRecord {
 }
 
 async function updateOrderReadinessCounters(orderId: string) {
-  const vendorOrders = (await prisma.vendorOrder.findMany({
+  return prisma.$transaction(async (tx) => {
+  await guardV14OrderMutationIfReleased(tx, orderId);
+  const vendorOrders = (await tx.vendorOrder.findMany({
     where: { orderId },
     select: { id: true, status: true },
   })) as VendorOrderCount[];
@@ -180,7 +184,7 @@ async function updateOrderReadinessCounters(orderId: string) {
   const readyVendorOrders = vendorOrders.filter((vendorOrder) => isReadyStatus(vendorOrder.status)).length;
   const allReady = totalVendorOrders > 0 && totalVendorOrders === readyVendorOrders;
 
-  await prisma.order.update({
+  await tx.order.update({
     where: { id: orderId },
     data: {
       vendorOrderCount: totalVendorOrders,
@@ -193,6 +197,7 @@ async function updateOrderReadinessCounters(orderId: string) {
   });
 
   return { totalVendorOrders, readyVendorOrders, allReady };
+  });
 }
 
 export async function createVendorOrdersForPaidMarketplaceOrder(orderId: string) {
@@ -223,6 +228,7 @@ export async function createVendorOrdersForPaidMarketplaceOrder(orderId: string)
                   id: true,
                   displayName: true,
                   marketClusterId: true,
+                      commissionRateBps: true,
                   pickupLocations: {
                     select: {
                       id: true,
@@ -258,6 +264,18 @@ export async function createVendorOrdersForPaidMarketplaceOrder(orderId: string)
   const grouped = groupOrderItemsByVendor(order.items);
 
   const result = await prisma.$transaction(async (tx) => {
+    await guardV14OrderMutationIfReleased(tx, order.id);
+    if (isV14OrderLockReleased()) {
+      const fresh = await tx.order.findUnique({
+        where: { id: order.id },
+        select: { status: true, paymentStatus: true, deliveryQuoteId: true },
+      });
+      if (!fresh || fresh.paymentStatus !== "PAID" ||
+          fresh.status !== "PROCESSING" ||
+          fresh.deliveryQuoteId !== order.deliveryQuoteId) {
+        throw new Error("Order state changed before vendor order creation.");
+      }
+    }
     let created = 0;
     let existing = 0;
 
@@ -289,6 +307,8 @@ export async function createVendorOrdersForPaidMarketplaceOrder(orderId: string)
           vendorId,
           marketClusterId: order.marketClusterId,
           status: VENDOR_ORDER_STATUS.AWAITING_VENDOR,
+          grossAmountNgn: items.reduce((sum, item) => sum + item.subtotalNgn, 0),
+          commissionRateBps: vendor.commissionRateBps,
           pickupLocationId: pickupLocation.id,
           pickupAddress: pickupLocation.address,
           pickupLat: pickupLocation.latitude,
@@ -404,6 +424,18 @@ export async function markVendorOrderReady(args: {
 
   if (!isReadyStatus(vendorOrder.status)) {
     await prisma.$transaction(async (tx) => {
+      await guardV14OrderMutationIfReleased(tx, vendorOrder.orderId);
+      if (isV14OrderLockReleased()) {
+        const fresh = await tx.vendorOrder.findUnique({
+          where: { id: vendorOrder.id },
+          select: { orderId: true, status: true },
+        });
+        if (!fresh || fresh.orderId !== vendorOrder.orderId ||
+            fresh.status === VENDOR_ORDER_STATUS.CANCELLED ||
+            fresh.status === VENDOR_ORDER_STATUS.REJECTED) {
+          throw new Error("Vendor order changed before readiness update.");
+        }
+      }
       await tx.vendorOrder.update({
         where: { id: vendorOrder.id },
         data: {
@@ -535,29 +567,58 @@ export async function attemptCreateKwikTaskForReadyOrder(orderId: string): Promi
     createdAt: new Date().toISOString(),
   };
 
-  const pendingTask = existingTask
-    ? await prisma.kwikDeliveryTask.update({
-        where: { id: existingTask.id },
-        data: {
-          status: "PENDING",
-          error: null,
-          rawCreateRequest: pendingPayload,
-        } as never,
-        select: { id: true },
-      })
-    : await prisma.kwikDeliveryTask.create({
-        data: {
-          orderId: order.id,
-          deliveryId: order.delivery?.id ?? null,
-          deliveryQuoteId: quote.id,
-          marketClusterId: quote.marketClusterId,
-          status: "PENDING",
-          pickupCount: vendorOrders.length,
-          deliveryCount: 1,
-          rawCreateRequest: pendingPayload,
-        } as never,
-        select: { id: true },
+  // Claim the task BEFORE the external Kwik request. When the gated V14
+  // release is enabled, the order lock and the pending task are persisted
+  // together; refund eligibility rejects ANY existing Kwik task.
+  const pendingTask = await prisma.$transaction(async (tx) => {
+    await guardV14OrderMutationIfReleased(tx, order.id);
+    if (isV14OrderLockReleased()) {
+      const freshOrder = await tx.order.findUnique({
+        where: { id: order.id },
+        select: { paymentStatus: true, status: true, deliveryQuoteId: true },
       });
+      if (!freshOrder || freshOrder.paymentStatus !== "PAID" ||
+          freshOrder.status !== "PROCESSING" ||
+          freshOrder.deliveryQuoteId !== quote.id) {
+        throw new Error("Order changed before Kwik task claim.");
+      }
+      const freshOrders = await tx.vendorOrder.findMany({
+        where: { orderId: order.id }, select: { status: true },
+      });
+      if (!freshOrders.length || freshOrders.some(item => !isReadyStatus(item.status))) {
+        throw new Error("Vendor readiness changed before Kwik task claim.");
+      }
+      const currentTask = await tx.kwikDeliveryTask.findFirst({
+        where: { orderId: order.id }, select: { status: true },
+      });
+      if (currentTask && (currentTask.status === "CREATED" || currentTask.status === "PENDING")) {
+        throw new Error("Kwik task already claimed or created.");
+      }
+    }
+    return existingTask
+      ? tx.kwikDeliveryTask.update({
+          where: { id: existingTask.id },
+          data: {
+            status: "PENDING",
+            error: null,
+            rawCreateRequest: pendingPayload,
+          } as never,
+          select: { id: true },
+        })
+      : tx.kwikDeliveryTask.create({
+          data: {
+            orderId: order.id,
+            deliveryId: order.delivery?.id ?? null,
+            deliveryQuoteId: quote.id,
+            marketClusterId: quote.marketClusterId,
+            status: "PENDING",
+            pickupCount: vendorOrders.length,
+            deliveryCount: 1,
+            rawCreateRequest: pendingPayload,
+          } as never,
+          select: { id: true },
+        });
+  });
 
   try {
     const result = await createKwikMarketplaceTaskFromStoredQuote({

@@ -1,5 +1,11 @@
+import { generateVendorSettlementsForOrder } from "@/lib/marketplace/vendorSettlement";
+import {
+  notifyDeliveryStatusChanged,
+  notifySettlementAvailabilityForOrder,
+} from "@/lib/notifications/eventTriggers";
 // app/api/cron/kwik-sync/route.ts
 import { prisma } from "@/lib/prisma";
+import { guardV14OrderMutationIfReleased } from "@/lib/marketplace/orderV14ReleaseGuard";
 import type { Prisma } from "@prisma/client";
 import { getKwikJobStatus } from "@/services/kwikWebhook";
 import {
@@ -97,6 +103,7 @@ export async function GET(req: Request) {
         }
 
         await prisma.$transaction(async (tx) => {
+          await guardV14OrderMutationIfReleased(tx, d.orderId);
           await tx.delivery.update({
             where: { id: d.id },
             data: deliveryData,
@@ -123,6 +130,33 @@ export async function GET(req: Request) {
             }
           }
         });
+
+        if (
+          shouldUpdateStatus &&
+          newDeliveryStatus === "DELIVERED"
+        ) {
+          await generateVendorSettlementsForOrder(
+            d.orderId
+          );
+
+          await notifySettlementAvailabilityForOrder(
+            d.orderId
+          ).catch(() => undefined);
+        }
+
+        if (shouldUpdateStatus) {
+          await notifyDeliveryStatusChanged(
+            d.orderId,
+            newDeliveryStatus as
+              | "CREATED"
+              | "ASSIGNED"
+              | "PICKED_UP"
+              | "IN_TRANSIT"
+              | "DELIVERED"
+              | "FAILED"
+              | "CANCELLED"
+          ).catch(() => undefined);
+        }
 
         results.push({
           deliveryId: d.id,

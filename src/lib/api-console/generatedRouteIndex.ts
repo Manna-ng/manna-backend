@@ -22,8 +22,48 @@ export type GeneratedApiRoute = {
 export const generatedApiRoutes: GeneratedApiRoute[] = [
   {
     "method": "POST",
+    "path": "/api/admin/auth/login",
+    "sourceFile": "src/app/api/admin/auth/login/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/auth/logout",
+    "sourceFile": "src/app/api/admin/auth/logout/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/auth/me",
+    "sourceFile": "src/app/api/admin/auth/me/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/customers",
+    "sourceFile": "src/app/api/admin/customers/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/customers/[id]",
+    "sourceFile": "src/app/api/admin/customers/[id]/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/dashboard",
+    "sourceFile": "src/app/api/admin/dashboard/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/deliveries",
+    "sourceFile": "src/app/api/admin/deliveries/route.ts"
+  },
+  {
+    "method": "POST",
     "path": "/api/admin/deliveries/[deliveryId]/dispatch",
     "sourceFile": "src/app/api/admin/deliveries/[deliveryId]/dispatch/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/deliveries/[id]",
+    "sourceFile": "src/app/api/admin/deliveries/[id]/route.ts"
   },
   {
     "method": "GET",
@@ -49,6 +89,16 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "GET",
     "path": "/api/admin/feedback",
     "sourceFile": "src/app/api/admin/feedback/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/feedback/[id]",
+    "sourceFile": "src/app/api/admin/feedback/[id]/route.ts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/admin/feedback/[id]",
+    "sourceFile": "src/app/api/admin/feedback/[id]/route.ts"
   },
   {
     "method": "GET",
@@ -96,6 +146,16 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/admin/orders/route.ts"
   },
   {
+    "method": "GET",
+    "path": "/api/admin/orders/[id]",
+    "sourceFile": "src/app/api/admin/orders/[id]/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/orders/[id]/cancel",
+    "sourceFile": "src/app/api/admin/orders/[id]/cancel/route.ts"
+  },
+  {
     "method": "POST",
     "path": "/api/admin/orders/[id]/delivery/kwik/create-task",
     "sourceFile": "src/app/api/admin/orders/[id]/delivery/kwik/create-task/route.ts"
@@ -122,6 +182,26 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
   },
   {
     "method": "GET",
+    "path": "/api/admin/payouts",
+    "sourceFile": "src/app/api/admin/payouts/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/payouts/[id]",
+    "sourceFile": "src/app/api/admin/payouts/[id]/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/payouts/[id]/finalize-otp",
+    "sourceFile": "src/app/api/admin/payouts/[id]/finalize-otp/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/payouts/[id]/reconcile",
+    "sourceFile": "src/app/api/admin/payouts/[id]/reconcile/route.ts"
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/products",
     "sourceFile": "src/app/api/admin/products/route.ts"
   },
@@ -136,7 +216,7 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "sourceFile": "src/app/api/admin/products/[id]/route.ts"
   },
   {
-    "method": "POST",
+    "method": "PATCH",
     "path": "/api/admin/products/[id]",
     "sourceFile": "src/app/api/admin/products/[id]/route.ts"
   },
@@ -634,6 +714,16 @@ export const generatedApiRoutes: GeneratedApiRoute[] = [
     "method": "GET",
     "path": "/api/vendors/settlements",
     "sourceFile": "src/app/api/vendors/settlements/route.ts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/vendors/withdrawals",
+    "sourceFile": "src/app/api/vendors/withdrawals/route.ts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/vendors/withdrawals",
+    "sourceFile": "src/app/api/vendors/withdrawals/route.ts"
   },
   {
     "method": "POST",

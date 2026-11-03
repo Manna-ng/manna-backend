@@ -18,6 +18,7 @@ const DEFAULT_CATEGORIES: NotificationCategory[] = [
   "SECURITY",
   "SYSTEM",
   "MARKETING",
+  "INVENTORY",
 ];
 
 function stringFromUnknown(value: unknown): string | null {
@@ -67,6 +68,36 @@ export async function createNotification(input: CreateNotificationInput) {
   }
 
   return notification;
+}
+export async function createNotificationOnce(
+  input: CreateNotificationInput
+) {
+  const existing =
+    await prisma.notification.findFirst({
+      where: {
+        eventType: input.eventType,
+        orderId: input.orderId ?? null,
+        vendorId: input.vendorId ?? null,
+        vendorOrderId:
+          input.vendorOrderId ?? null,
+        deliveryId:
+          input.deliveryId ?? null,
+        actionUrl:
+          input.actionUrl ?? null,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      include: {
+        recipients: true,
+      },
+    });
+
+  if (existing) {
+    return existing;
+  }
+
+  return createNotification(input);
 }
 
 export async function registerPushDeviceToken(input: RegisterPushTokenInput) {

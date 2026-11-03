@@ -1,29 +1,69 @@
-import { NextResponse, type NextRequest } from "next/server";
+import {
+  NextResponse,
+  type NextRequest,
+} from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdminUser } from "@/lib/notifications/auth";
+import {
+  requireAdmin,
+} from "@/lib/auth/requireAdmin";
 
-export async function GET(req: NextRequest) {
-  try {
-    await requireAdminUser();
+export async function GET(
+  req: NextRequest
+) {
+  const admin =
+    await requireAdmin();
 
-    const url = new URL(req.url);
-    const status = url.searchParams.get("status");
-    const orderId = url.searchParams.get("orderId");
-    const limit = Number(url.searchParams.get("limit") ?? "50");
+  if (!admin.ok) {
+    return admin.response;
+  }
 
-    const feedback = await prisma.customerFeedback.findMany({
+  const status =
+    req.nextUrl.searchParams.get(
+      "status"
+    );
+
+  const orderId =
+    req.nextUrl.searchParams.get(
+      "orderId"
+    );
+
+  const rawLimit =
+    Number(
+      req.nextUrl.searchParams.get(
+        "limit"
+      ) ?? "50"
+    );
+
+  const limit =
+    Number.isInteger(
+      rawLimit
+    )
+      ? Math.min(
+          Math.max(
+            rawLimit,
+            1
+          ),
+          100
+        )
+      : 50;
+
+  const feedback =
+    await prisma.customerFeedback.findMany({
       where: {
-        ...(status ? { status } : {}),
-        ...(orderId ? { orderId } : {}),
+        ...(status
+          ? { status }
+          : {}),
+        ...(orderId
+          ? { orderId }
+          : {}),
       },
-      orderBy: { createdAt: "desc" },
-      take: Math.min(Number.isFinite(limit) ? limit : 50, 100),
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: limit,
     });
 
-    return NextResponse.json({ data: feedback });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load feedback";
-    const status = message.includes("Unauthorized") ? 401 : 500;
-    return NextResponse.json({ message }, { status });
-  }
+  return NextResponse.json({
+    data: feedback,
+  });
 }

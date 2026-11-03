@@ -699,7 +699,12 @@ export async function POST(req: Request) {
 
     const headers = new Headers({
       Accept: "application/json, text/plain, */*",
-      Cookie: `manna_token=${actorToken}`,
+      Cookie: [
+        `manna_token=${actorToken}`,
+        `manna_admin_token=${adminToken ?? ""}`,
+        `manna_admin_csrf=${csrfCookie}`,
+      ].join("; "),
+      "x-manna-admin-csrf": csrfCookie,
       "x-manna-api-console-execution": "v1",
     });
 

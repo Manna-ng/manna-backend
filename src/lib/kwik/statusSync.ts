@@ -1,10 +1,15 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
+import { guardV14OrderMutationIfReleased, isV14OrderLockReleased } from "@/lib/marketplace/orderV14ReleaseGuard";
 import {
   mapKwikJobsToMannaStatus,
   type KwikJobStatusSnapshot,
 } from "@/lib/kwik/statusMapping";
 import { generateVendorSettlementsForOrder } from "@/lib/marketplace/vendorSettlement";
+import {
+  notifyDeliveryStatusChanged,
+  notifySettlementAvailabilityForOrder,
+} from "@/lib/notifications/eventTriggers";
 
 type KwikViewTaskOrder = {
   job_id?: number;
@@ -173,9 +178,78 @@ export async function syncKwikDeliveryStatusByDeliveryId(
   const summary = mapKwikJobsToMannaStatus(jobs);
   const currentKwikJobStatus = latestJobStatus(jobs);
   const statusPayloadHash = hashPayload(response);
-  const changed = delivery.kwikJobStatus !== currentKwikJobStatus;
+  // Provider status fetch is completed BEFORE this short database transaction.
+  // The global release is hard-disabled until all dispatch/refund writers are protected.
+  let changed = delivery.kwikJobStatus !== currentKwikJobStatus;
+  let updatedDelivery: { id: string; orderId: string };
+  if (isV14OrderLockReleased()) {
+    const persisted = await prisma.$transaction(async (tx) => {
+      await guardV14OrderMutationIfReleased(tx, delivery.orderId);
+      const fresh = await tx.delivery.findUnique({
+        where: { id: delivery.id },
+        select: { orderId: true, kwikUniqueOrderId: true, kwikJobStatus: true, status: true },
+      });
+      if (!fresh || fresh.orderId !== delivery.orderId ||
+          fresh.kwikUniqueOrderId !== delivery.kwikUniqueOrderId) {
+        throw new Error("Kwik delivery identity changed while synchronizing.");
+      }
+      if ((["DELIVERED", "FAILED", "CANCELLED"] as string[]).includes(fresh.status) &&
+          fresh.status !== summary.deliveryStatus) {
+        throw new Error("Kwik terminal delivery state cannot be overwritten.");
+      }
+  const updatedDelivery = await tx.delivery.update({
+    where: { id: delivery.id },
+    data: {
+      status: summary.deliveryStatus,
+      processingStatus: summary.processingStatus,
+      kwikJobStatus: currentKwikJobStatus,
+      lastStatusCheckAt: new Date(),
+      statusCheckAttempts: { increment: 1 },
+      nextStatusCheckAt: nextCheckAt(summary.nextCheckDelayMinutes),
+      lastStatusCheckError: null,
+      deliveredAt: summary.deliveryStatus === "DELIVERED" ? new Date() : undefined,
+      kwikLastTerminalStatus: summary.isTerminal ? currentKwikJobStatus : undefined,
+      kwikRawResponse: response,
+    } as never,
+    select: {
+      id: true,
+      orderId: true,
+    },
+  });
 
-  const updatedDelivery = await prisma.delivery.update({
+  await tx.order.update({
+    where: { id: updatedDelivery.orderId },
+    data: {
+      status: summary.orderStatus,
+    } as never,
+  });
+
+  await tx.kwikDeliveryTask.updateMany({
+    where: {
+      OR: [
+        { deliveryId: delivery.id },
+        { kwikUniqueOrderId: delivery.kwikUniqueOrderId },
+      ],
+    },
+    data: {
+      status:
+        summary.deliveryStatus === "FAILED"
+          ? "FAILED"
+          : summary.deliveryStatus === "CANCELLED"
+            ? "CANCELLED"
+            : "CREATED",
+      rawCreateResponse: {
+        lastStatusSyncHash: statusPayloadHash,
+        lastStatusSyncResponse: response,
+      },
+    } as never,
+  });
+      return { updatedDelivery, changed: fresh.kwikJobStatus !== currentKwikJobStatus };
+    });
+    updatedDelivery = persisted.updatedDelivery;
+    changed = persisted.changed;
+  } else {
+  updatedDelivery = await prisma.delivery.update({
     where: { id: delivery.id },
     data: {
       status: summary.deliveryStatus,
@@ -222,17 +296,34 @@ export async function syncKwikDeliveryStatusByDeliveryId(
       },
     } as never,
   });
+  }
 
   let settlementCreatedCount = 0;
   let settlementSkippedCount = 0;
 
   if (summary.shouldGenerateSettlement) {
-    const settlementResult = await generateVendorSettlementsForOrder(updatedDelivery.orderId);
-    settlementCreatedCount = settlementResult.createdCount;
-    settlementSkippedCount = settlementResult.skippedCount;
+    const settlementResult =
+      await generateVendorSettlementsForOrder(
+        updatedDelivery.orderId
+      );
+
+    settlementCreatedCount =
+      settlementResult.createdCount;
+    settlementSkippedCount =
+      settlementResult.skippedCount;
+
+    await notifySettlementAvailabilityForOrder(
+      updatedDelivery.orderId
+    ).catch(() => undefined);
   }
 
-  return {
+  if (changed) {
+    await notifyDeliveryStatusChanged(
+      updatedDelivery.orderId,
+      summary.deliveryStatus
+    ).catch(() => undefined);
+  }
+return {
     deliveryId: delivery.id,
     orderId: updatedDelivery.orderId,
     kwikUniqueOrderId: delivery.kwikUniqueOrderId,

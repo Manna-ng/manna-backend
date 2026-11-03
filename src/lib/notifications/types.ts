@@ -11,7 +11,7 @@ export type NotificationCategory =
   | "FEEDBACK"
   | "SECURITY"
   | "SYSTEM"
-  | "MARKETING";
+  | "MARKETING" | "INVENTORY";
 
 export type NotificationStatus = "UNREAD" | "READ" | "ARCHIVED";
 

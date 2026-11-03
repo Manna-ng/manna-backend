@@ -1,3 +1,9 @@
+import { cookies } from "next/headers";
+import { verifyAuthToken } from "@/lib/auth";
+import {
+  haversineDistanceKm,
+  type Coordinates,
+} from "@/lib/marketplace/geo";
 import { Prisma, type Discount } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -50,6 +56,170 @@ function serializeDiscount(discount: Discount | null) {
   };
 }
 
+async function resolveCatalogCoordinates(
+  explicitCoordinates: Coordinates | null
+): Promise<{
+  coordinates: Coordinates | null;
+  source: "REQUEST" | "PROFILE" | "NONE";
+}> {
+  if (explicitCoordinates) {
+    return {
+      coordinates: explicitCoordinates,
+      source: "REQUEST",
+    };
+  }
+
+  try {
+    const cookieStore = await cookies();
+    const token =
+      cookieStore.get("manna_token")?.value;
+
+    const decoded = token
+      ? verifyAuthToken(token)
+      : null;
+
+    if (
+      !decoded?.userId ||
+      decoded.role !== "CUSTOMER"
+    ) {
+      return {
+        coordinates: null,
+        source: "NONE",
+      };
+    }
+
+    const profile =
+      await prisma.customerDeliveryProfile.findUnique({
+        where: {
+          userId: decoded.userId,
+        },
+        select: {
+          latitude: true,
+          longitude: true,
+        },
+      });
+
+    if (
+      !profile ||
+      profile.latitude === null ||
+      profile.longitude === null ||
+      !Number.isFinite(profile.latitude) ||
+      !Number.isFinite(profile.longitude)
+    ) {
+      return {
+        coordinates: null,
+        source: "NONE",
+      };
+    }
+
+    return {
+      coordinates: {
+        lat: profile.latitude,
+        lng: profile.longitude,
+      },
+      source: "PROFILE",
+    };
+  } catch {
+    return {
+      coordinates: null,
+      source: "NONE",
+    };
+  }
+}
+
+const proximityProductSelect = {
+  id: true,
+  vendor: {
+    select: {
+      pickupLocations: {
+        where: {
+          isActive: true,
+          latitude: { not: null },
+          longitude: { not: null },
+          capturedAt: { not: null },
+        },
+        orderBy: [
+          { isDefault: "desc" as const },
+          { createdAt: "asc" as const },
+        ],
+        take: 1,
+        select: {
+          latitude: true,
+          longitude: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.ProductSelect;
+
+type ProximityProduct =
+  Prisma.ProductGetPayload<{
+    select: typeof proximityProductSelect;
+  }>;
+
+function productDistanceKm(
+  product: ProximityProduct,
+  coordinates: Coordinates
+): number | null {
+  const pickup =
+    product.vendor?.pickupLocations[0];
+
+  const latitude =
+    pickup?.latitude ?? null;
+
+  const longitude =
+    pickup?.longitude ?? null;
+
+  if (
+    latitude === null ||
+    longitude === null ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude)
+  ) {
+    return null;
+  }
+
+  return Number(
+    haversineDistanceKm(
+      coordinates,
+      {
+        lat: latitude,
+        lng: longitude,
+      }
+    ).toFixed(2)
+  );
+}
+
+function rankProductsByProximity(
+  products: ProximityProduct[],
+  coordinates: Coordinates
+) {
+  return products
+    .map((product, index) => ({
+      product,
+      index,
+      distanceKm:
+        productDistanceKm(
+          product,
+          coordinates
+        ),
+    }))
+    .sort((a, b) => {
+      const aDistance =
+        a.distanceKm ??
+        Number.POSITIVE_INFINITY;
+
+      const bDistance =
+        b.distanceKm ??
+        Number.POSITIVE_INFINITY;
+
+      if (aDistance !== bDistance) {
+        return aDistance - bDistance;
+      }
+
+      return a.index - b.index;
+    });
+}
 const productSelect = {
   id: true,
   name: true,
@@ -102,7 +272,11 @@ const productSelect = {
 
 type CatalogProduct = Prisma.ProductGetPayload<{ select: typeof productSelect }>;
 
-function serializeProduct(product: CatalogProduct, discounts: Discount[]) {
+function serializeProduct(
+  product: CatalogProduct,
+  discounts: Discount[],
+  distanceKm: number | null = null
+) {
   const discount = getBestActiveDiscountForProduct(discounts, product.id);
 
   return {
@@ -111,6 +285,7 @@ function serializeProduct(product: CatalogProduct, discounts: Discount[]) {
       average: product.ratingAverage,
       count: product.ratingCount,
     },
+    distanceKm,
     seller: {
       name: product.vendor?.displayName ?? "Manna",
       vendorId: product.vendor?.id ?? null,
@@ -147,9 +322,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ message: coordinateInput.error }, { status: 400 });
     }
 
+    const catalogLocation =
+      await resolveCatalogCoordinates(
+        coordinateInput.coordinates
+      );
+
+    const rankingCoordinates =
+      catalogLocation.coordinates;
+
     const requestedMarketClusterId = searchParams.get("marketClusterId")?.trim() || null;
     const marketSelection = await resolveMarketSelection({
-      coordinates: coordinateInput.coordinates,
+      coordinates: rankingCoordinates,
       marketClusterId: requestedMarketClusterId,
       source: requestedMarketClusterId ? "EXPLICIT" : undefined,
     });
@@ -159,7 +342,7 @@ export async function GET(req: NextRequest) {
     }
 
     const outsideServiceArea =
-      Boolean(coordinateInput.coordinates) &&
+      Boolean(rankingCoordinates) &&
       !requestedMarketClusterId &&
       marketSelection.serviceable === false;
 
@@ -221,8 +404,14 @@ export async function GET(req: NextRequest) {
       },
     ];
 
-    if (marketSelection.selectedMarket?.id) {
-      and.push({ marketClusterId: marketSelection.selectedMarket.id });
+    if (
+      requestedMarketClusterId &&
+      marketSelection.selectedMarket?.id
+    ) {
+      and.push({
+        marketClusterId:
+          marketSelection.selectedMarket.id,
+      });
     }
 
     if (q) {
@@ -322,8 +511,12 @@ export async function GET(req: NextRequest) {
     const categoryBaseWhere: Prisma.ProductWhereInput = {
       isActive: true,
       approvalStatus: "APPROVED",
-      ...(marketSelection.selectedMarket?.id
-        ? { marketClusterId: marketSelection.selectedMarket.id }
+      ...(requestedMarketClusterId &&
+      marketSelection.selectedMarket?.id
+        ? {
+            marketClusterId:
+              marketSelection.selectedMarket.id,
+          }
         : {}),
       OR: [
         { vendorId: null },
@@ -337,42 +530,98 @@ export async function GET(req: NextRequest) {
       ],
     };
 
-    if (outsideServiceArea) {
-      return NextResponse.json({
-        marketContext: {
-          serviceable: false,
-          selectedMarket: null,
-          nearestMarket: marketSelection.nearestMarket,
-          outsideServiceArea: true,
-        },
-        filters: { categories: [] },
-        pagination: {
-          page,
-          pageSize,
-          total: 0,
-          totalPages: 0,
-          hasNextPage: false,
-          hasPreviousPage: false,
-        },
-        products: [],
-      });
-    }
 
-    const [total, products, categoryPairs] = await Promise.all([
+    const [total, categoryPairs] = await Promise.all([
       prisma.product.count({ where }),
-      prisma.product.findMany({
-        where,
-        orderBy,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: productSelect,
-      }),
       prisma.product.findMany({
         where: categoryBaseWhere,
         select: { category: true, subCategory: true },
         distinct: ["category", "subCategory"],
       }),
     ]);
+
+    const distanceByProductId =
+      new Map<string, number | null>();
+
+    let products: CatalogProduct[];
+
+    if (rankingCoordinates) {
+      const proximityCandidates =
+        await prisma.product.findMany({
+          where,
+          orderBy,
+          select: proximityProductSelect,
+        });
+
+      const ranked =
+        rankProductsByProximity(
+          proximityCandidates,
+          rankingCoordinates
+        );
+
+      const pageStart =
+        (page - 1) * pageSize;
+
+      const pageEntries =
+        ranked.slice(
+          pageStart,
+          pageStart + pageSize
+        );
+
+      const pageIds =
+        pageEntries.map(
+          (entry) => entry.product.id
+        );
+
+      for (const entry of pageEntries) {
+        distanceByProductId.set(
+          entry.product.id,
+          entry.distanceKm
+        );
+      }
+
+      const rows =
+        pageIds.length > 0
+          ? await prisma.product.findMany({
+              where: {
+                id: {
+                  in: pageIds,
+                },
+              },
+              select: productSelect,
+            })
+          : [];
+
+      const rowsById =
+        new Map(
+          rows.map(
+            (row) => [
+              row.id,
+              row,
+            ])
+        );
+
+      products =
+        pageIds
+          .map(
+            (id) => rowsById.get(id)
+          )
+          .filter(
+            (
+              row
+            ): row is CatalogProduct =>
+              Boolean(row)
+          );
+    } else {
+      products =
+        await prisma.product.findMany({
+          where,
+          orderBy,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          select: productSelect,
+        });
+    }
 
     const categoryMap = new Map<string, Set<string>>();
     for (const row of categoryPairs) {
@@ -390,7 +639,11 @@ export async function GET(req: NextRequest) {
         serviceable: marketSelection.serviceable,
         selectedMarket: marketSelection.selectedMarket,
         nearestMarket: marketSelection.nearestMarket,
-        outsideServiceArea: false,
+        outsideServiceArea,
+        proximityApplied:
+          Boolean(rankingCoordinates),
+        proximitySource:
+          catalogLocation.source,
       },
       filters: {
         categories: Array.from(categoryMap.entries())
@@ -408,7 +661,15 @@ export async function GET(req: NextRequest) {
         hasNextPage: page < totalPages,
         hasPreviousPage: page > 1,
       },
-      products: products.map((product) => serializeProduct(product, activeDiscounts)),
+      products: products.map((product) =>
+        serializeProduct(
+          product,
+          activeDiscounts,
+          distanceByProductId.get(
+            product.id
+          ) ?? null
+        )
+      ),
     });
   } catch (error) {
     console.error("GET /api/products error:", error);

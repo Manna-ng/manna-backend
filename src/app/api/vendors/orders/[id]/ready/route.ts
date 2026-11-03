@@ -1,3 +1,4 @@
+import { notifyVendorOrderReady } from "@/lib/notifications/eventTriggers";
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
@@ -36,6 +37,11 @@ export async function POST(
       actorUserId: decoded.userId,
       note: body.note,
     });
+
+    await notifyVendorOrderReady(
+      result.vendorOrderId,
+      result.allReady
+    ).catch(() => undefined);
 
     return NextResponse.json(
       {

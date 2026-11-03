@@ -19,7 +19,7 @@ function readRole(value: unknown): NotificationRole | null {
 }
 
 function readCategory(value: unknown): NotificationCategory {
-  const allowed = ["ORDER", "DELIVERY", "PAYMENT", "VENDOR", "SETTLEMENT", "FEEDBACK", "SECURITY", "SYSTEM", "MARKETING"];
+  const allowed = ["ORDER", "DELIVERY", "PAYMENT", "VENDOR", "SETTLEMENT", "FEEDBACK", "SECURITY", "SYSTEM", "MARKETING", "INVENTORY"];
   return typeof value === "string" && allowed.includes(value) ? (value as NotificationCategory) : "SYSTEM";
 }
 

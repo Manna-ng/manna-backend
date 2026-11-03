@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { verifyAuthToken } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 import { createDeliveryFromOrder } from "@/lib/delivery/createDeliveryFromOrder";
 
 export async function POST(
@@ -10,24 +9,12 @@ export async function POST(
 ) {
   try {
     const { deliveryId } = await params;
-    const cookieStore = await cookies();
-    const token = cookieStore.get("manna_token")?.value;
+    const admin = await requireAdmin();
 
-    if (!token) {
-      return NextResponse.json(
-        { ok: false, message: "Unauthorized" },
-        { status: 401 }
-      );
+    if (!admin.ok) {
+      return admin.response;
     }
 
-    const decoded = verifyAuthToken(token);
-
-    if (!decoded || decoded.role !== "ADMIN") {
-      return NextResponse.json(
-        { ok: false, message: "Admin access required" },
-        { status: 403 }
-      );
-    }
 
     const delivery = await prisma.delivery.findUnique({
       where: { id: deliveryId },

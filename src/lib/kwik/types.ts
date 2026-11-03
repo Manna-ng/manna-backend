@@ -93,6 +93,15 @@ export type KwikCreateTaskPayload = {
   amount: string;
   surge_cost: number;
   surge_type: number;
+  cash_handling_charges: number;
+  cash_handling_percentage: number;
+  net_processed_amount: number;
+  kwister_cash_handling_charge: number;
+  delivery_charge_by_buyer: 1 | 2;
+  delivery_charge: number;
+  collect_on_delivery: number;
+  is_cod_job: 0 | 1;
+  parcel_amount?: number;
   delivery_instruction: string;
   loaders_amount: number;
   loaders_count: number;

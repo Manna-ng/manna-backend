@@ -1,12 +1,24 @@
 import crypto from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
+import {
+  guardV14OrderMutationIfReleased,
+  isV14OrderLockReleased,
+} from "@/lib/marketplace/orderV14ReleaseGuard";
 import { createDeliveryFromOrder } from "@/lib/delivery/createDeliveryFromOrder";
 import {
   isWithinDeliveryWindow,
   getNextDeliveryWindowStart,
 } from "@/lib/delivery/deliveryWindow";
 import { createVendorOrdersForPaidMarketplaceOrder } from "@/lib/marketplace/vendorOrders";
+import {
+  notifyOrderPaidStakeholders,
+  notifyVendorStockState,
+} from "@/lib/notifications/eventTriggers";
+import {
+  applyVendorWithdrawalTransferEvent,
+} from "@/lib/marketplace/vendorWithdrawal";
 
 export const runtime = "nodejs";
 
@@ -55,7 +67,7 @@ function verifyPaystackSignature(rawBody: string, signature: string | null) {
 }
 
 async function markMarketplaceOrderReadyForVendorPreparation(orderId: string) {
-  await prisma.delivery.upsert({
+  const payload = {
     where: { orderId },
     update: {
       processingStatus: "QUEUED",
@@ -71,12 +83,38 @@ async function markMarketplaceOrderReadyForVendorPreparation(orderId: string) {
       requiresManualDispatch: false,
       dispatchDeferredReason: "WAITING_FOR_VENDOR_READY",
     },
+  } satisfies Prisma.DeliveryUpsertArgs;
+
+  // No behavior change before the separately approved global release.
+  if (!isV14OrderLockReleased()) {
+    await prisma.delivery.upsert(payload);
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await guardV14OrderMutationIfReleased(tx, orderId);
+    const current = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { paymentStatus: true },
+    });
+    if (!current || current.paymentStatus !== "PAID") {
+      throw new Error("Marketplace preparation requires a paid order under lock.");
+    }
+    await tx.delivery.upsert(payload);
   });
 }
 
 async function prepareMarketplaceOrderForVendors(orderId: string) {
   await markMarketplaceOrderReadyForVendorPreparation(orderId);
-  return createVendorOrdersForPaidMarketplaceOrder(orderId);
+
+  const result =
+    await createVendorOrdersForPaidMarketplaceOrder(orderId);
+
+  await notifyOrderPaidStakeholders(orderId).catch(
+    () => undefined
+  );
+
+  return result;
 }
 
 export async function POST(req: NextRequest) {
@@ -92,9 +130,69 @@ export async function POST(req: NextRequest) {
     }
 
     const event: unknown = JSON.parse(rawBody);
-    const eventRecord = event as { event?: unknown; data?: { reference?: unknown } };
+    const eventRecord = event as {
+      event?: unknown;
+      data?: {
+        reference?: unknown;
+        transfer_code?: unknown;
+        amount?: unknown;
+      };
+    };
 
-    if (eventRecord.event !== "charge.success") {
+    const eventName =
+      typeof eventRecord.event === "string"
+        ? eventRecord.event
+        : "";
+
+    if (
+      eventName === "transfer.success" ||
+      eventName === "transfer.failed" ||
+      eventName === "transfer.reversed"
+    ) {
+      const transferReference =
+        typeof eventRecord.data?.reference === "string"
+          ? eventRecord.data.reference
+          : null;
+
+      if (!transferReference) {
+        return NextResponse.json(
+          { ok: false, message: "Missing transfer reference" },
+          { status: 400 }
+        );
+      }
+
+      const transferCode =
+        typeof eventRecord.data?.transfer_code === "string"
+          ? eventRecord.data.transfer_code
+          : null;
+
+      const amountKobo =
+        typeof eventRecord.data?.amount === "number" &&
+        Number.isInteger(eventRecord.data.amount)
+          ? eventRecord.data.amount
+          : null;
+
+      const result =
+        await applyVendorWithdrawalTransferEvent({
+          event: eventName,
+          reference: transferReference,
+          transferCode,
+          amountKobo,
+        });
+
+      return NextResponse.json(
+        {
+          ok: true,
+          message: result.handled
+            ? "Transfer event processed"
+            : "Transfer event did not match a Manna withdrawal",
+          result,
+        },
+        { status: 200 }
+      );
+    }
+
+    if (eventName !== "charge.success") {
       return NextResponse.json({ ok: true, message: "Ignored event" }, { status: 200 });
     }
 
@@ -148,6 +246,18 @@ export async function POST(req: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      await guardV14OrderMutationIfReleased(tx, order.id);
+      // Only on future release: re-read the charge identity after locking.
+      if (isV14OrderLockReleased()) {
+        const current = await tx.order.findUnique({
+          where: { id: order.id },
+          select: { paymentReference: true, paymentStatus: true },
+        });
+        if (!current || current.paymentReference !== reference ||
+            current.paymentStatus !== "PENDING") {
+          throw new Error("Charge identity or state changed under lock; reconcile before retry.");
+        }
+      }
       for (const item of order.items) {
         const variant = item.productVariant;
 
@@ -181,6 +291,39 @@ export async function POST(req: NextRequest) {
         },
       });
     });
+
+
+    const changedVariantIds =
+      Array.from(
+        new Set(
+          order.items
+            .map(
+              (item) =>
+                item.productVariant?.id
+            )
+            .filter(
+              (id): id is string =>
+                Boolean(id)
+            )
+        )
+      );
+
+    await Promise.all(
+      changedVariantIds.map(
+        (variantId) =>
+          notifyVendorStockState(
+            variantId
+          ).catch(
+            () => undefined
+          )
+      )
+    );
+
+    await notifyOrderPaidStakeholders(
+      order.id
+    ).catch(
+      () => undefined
+    );
 
     if (order.deliveryQuoteId) {
       const vendorOrderResult = await prepareMarketplaceOrderForVendors(order.id);

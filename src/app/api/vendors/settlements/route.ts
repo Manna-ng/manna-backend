@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
           displayName: true,
           payableBalanceNgn: true,
           pendingSettlementNgn: true,
+          reservedWithdrawalNgn: true,
           lifetimeGrossSalesNgn: true,
           lifetimeCommissionNgn: true,
           lifetimePaidOutNgn: true,

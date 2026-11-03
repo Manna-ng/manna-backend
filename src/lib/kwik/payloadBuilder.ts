@@ -36,7 +36,7 @@ export type MarketplaceKwikRouteInput = {
   delivery: CustomerDeliveryInput;
   vehicleId?: number;
   vehicleName?: string;
-  parcelAmountNgn?: number;
+  codAmountNgn?: number;
   deliveryImages?: string;
   requiresOtp?: boolean;
 };
@@ -141,8 +141,8 @@ export function buildKwikQuotePayload(
     is_loader_required: 0,
     loaders_amount: 0,
     loaders_count: 0,
-    is_cod_job: input.parcelAmountNgn ? 1 : 0,
-    parcel_amount: input.parcelAmountNgn,
+    is_cod_job: input.codAmountNgn ? 1 : 0,
+    parcel_amount: input.codAmountNgn,
   };
 }
 
@@ -177,7 +177,7 @@ export function buildKwikBillBreakdownPayload(
     loaders_count: quotePayload.loaders_count,
     is_cod_job: quotePayload.is_cod_job,
     parcel_amount: quotePayload.parcel_amount,
-    delivery_charge_by_buyer: 1,
+    delivery_charge_by_buyer: 2,
     delivery_instruction: quotePayload.delivery_instruction,
   };
 }
@@ -197,6 +197,20 @@ export function buildKwikCreateTaskPayload(
   const totalNoOfTasks = numberFromUnknown(quoteData.total_no_of_tasks) ?? quotePayload.deliveries.length;
   const surgeCost = integerNgnFromUnknown(billData.SURGE_PRICING) ?? 0;
   const surgeType = numberFromUnknown(billData.SURGE_TYPE) ?? 0;
+  const cashHandlingCharges =
+    integerNgnFromUnknown(billData.CASH_HANDLING_CHARGE) ?? 0;
+  const cashHandlingPercentage =
+    numberFromUnknown(billData.CASH_HANDLING_PERCENTAGE) ?? 0;
+  const netProcessedAmount =
+    integerNgnFromUnknown(billData.NET_CASH_PROCEEDS) ?? 0;
+  const kwisterCashHandlingCharge =
+    integerNgnFromUnknown(billData.KWISTER_CASH_HANDLING_CHARGE) ?? 0;
+  const deliveryChargeByBuyer =
+    numberFromUnknown(billData.delivery_charge_by_buyer) ?? 2;
+  const deliveryCharge =
+    integerNgnFromUnknown(billData.DELIVERY_CHARGE) ?? 0;
+  const collectOnDelivery =
+    integerNgnFromUnknown(billData.COLLECT_ON_DELIVERY) ?? 0;
 
   const createPayload: KwikCreateTaskPayload = {
     domain_name: config.domainName,
@@ -222,6 +236,16 @@ export function buildKwikCreateTaskPayload(
     amount: String(perTaskCost),
     surge_cost: surgeCost,
     surge_type: surgeType,
+    cash_handling_charges: cashHandlingCharges,
+    cash_handling_percentage: cashHandlingPercentage,
+    net_processed_amount: netProcessedAmount,
+    kwister_cash_handling_charge: kwisterCashHandlingCharge,
+    delivery_charge_by_buyer:
+      deliveryChargeByBuyer === 1 ? 1 : 2,
+    delivery_charge: deliveryCharge,
+    collect_on_delivery: collectOnDelivery,
+    is_cod_job: quotePayload.is_cod_job,
+    parcel_amount: quotePayload.parcel_amount,
     delivery_instruction: quotePayload.delivery_instruction,
     loaders_amount: quotePayload.loaders_amount,
     loaders_count: quotePayload.loaders_count,

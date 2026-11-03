@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { notifyVendorStockState } from "@/lib/notifications/eventTriggers";
 
 const VARIANT_UNITS = ["PIECE", "KG", "PAINT", "HALF_PAINT", "BASKET"] as const;
 
@@ -122,6 +123,9 @@ export async function PATCH(
       where: { id: variantId },
       data: updates as never,
     });
+
+
+    await notifyVendorStockState(variantId).catch(() => undefined);
 
     return NextResponse.json({ variant });
   } catch (error: unknown) {
